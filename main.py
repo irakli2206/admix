@@ -1,4 +1,5 @@
-from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Request
+from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Literal
@@ -13,6 +14,9 @@ app = FastAPI()
 
 # Vendor values supported by admix -v (see README Raw Data Format)
 VENDOR_CHOICES = Literal["23andme", "ancestry", "ftdna", "ftdna2", "wegene", "myheritage"]
+
+# Max upload size to avoid OOM on low-memory hosts (e.g. Render free tier). 30 MB.
+MAX_UPLOAD_BYTES = 30 * 1024 * 1024
 
 
 _K36_G25_MATRIX = None
@@ -84,10 +88,31 @@ def home():
     return {"message": "Kvali Engine is running"}
 
 
+@app.head("/")
+def home_head():
+    """Allow HEAD / for health checks (e.g. Render)."""
+    return Response(status_code=200)
+
+
+def check_upload_size(request: Request) -> None:
+    """Reject uploads over MAX_UPLOAD_BYTES to avoid OOM on low-RAM servers."""
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_UPLOAD_BYTES:
+                raise HTTPException(
+                    status_code=413,
+                    detail=f"File too large. Max size is {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
+                )
+        except ValueError:
+            pass
+
+
 @app.post("/raw-to-k36")
 async def process_dna(
     file: UploadFile = File(...),
     vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
+    _: None = Depends(check_upload_size),
 ):
     temp_path = f"temp_{file.filename}"
     with open(temp_path, "wb") as buffer:
@@ -194,6 +219,7 @@ async def convert_k36_to_g25(data: K36Input):
 async def process_dna_to_g25(
     file: UploadFile = File(...),
     vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
+    _: None = Depends(check_upload_size),
 ):
     """
     Full pipeline: Raw DNA -> K36 -> Simulated G25 coordinates.
