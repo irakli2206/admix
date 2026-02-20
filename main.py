@@ -1,15 +1,18 @@
-from fastapi import FastAPI, UploadFile, File, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, List
-import shutil
+from typing import Dict, List, Literal
 import os
+import shutil
 import subprocess
 
 import numpy as np
 import pandas as pd
 
 app = FastAPI()
+
+# Vendor values supported by admix -v (see README Raw Data Format)
+VENDOR_CHOICES = Literal["23andme", "ancestry", "ftdna", "ftdna2", "wegene", "myheritage"]
 
 
 _K36_G25_MATRIX = None
@@ -82,14 +85,17 @@ def home():
 
 
 @app.post("/raw-to-k36")
-async def process_dna(file: UploadFile = File(...)):
+async def process_dna(
+    file: UploadFile = File(...),
+    vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
+):
     temp_path = f"temp_{file.filename}"
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
     try:
         result = subprocess.run(
-            ["admix", "-f", temp_path, "-v", "23andme", "-m", "K36"],
+            ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
             capture_output=True,
             text=True,
             check=True,
@@ -185,7 +191,10 @@ async def convert_k36_to_g25(data: K36Input):
 
 
 @app.post("/raw-to-g25")
-async def process_dna_to_g25(file: UploadFile = File(...)):
+async def process_dna_to_g25(
+    file: UploadFile = File(...),
+    vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
+):
     """
     Full pipeline: Raw DNA -> K36 -> Simulated G25 coordinates.
     """
@@ -196,7 +205,7 @@ async def process_dna_to_g25(file: UploadFile = File(...)):
     try:
         # Step 1: Run admix to get K36
         result = subprocess.run(
-            ["admix", "-f", temp_path, "-v", "23andme", "-m", "K36"],
+            ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
             capture_output=True,
             text=True,
             check=True,
