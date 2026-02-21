@@ -110,34 +110,25 @@ def read_raw_data(data_format, data_file_name=None):
     raise ValueError("Data format does not exist: %s" % data_format)
 
 
+# Cache loaded model data so we don't reload the big frequency matrix on every request (avoids OOM on Render).
+_model_cache = {}
+
+
 def read_model(model):
     """
-    Load SNP list and frequency matrix.
-    K36.alleles format: rsID allele1 allele2 (space-separated).
-    K36.36.F has one row per SNP: frequency of the SECOND allele (column 3) in each of 36 populations.
-    We treat that allele as 'minor' and the first as 'major' so the likelihood matches the .F matrix.
+    Load SNP list and frequency matrix. Reads frequency file first so we only load
+    that many allele lines (saves memory when alleles file has more lines than frequency).
+    Result is cached per model so repeated requests reuse the same arrays (critical on low-RAM).
     Returns: (snp, minor_alleles, major_alleles, frequency) as numpy arrays.
-    frequency shape = (n_snps, n_populations).
     """
+    if model in _model_cache:
+        return _model_cache[model]
+
     snp_file_name = admix_models.snp_file_name(model)
     frequency_file_name = admix_models.frequency_file_name(model)
     base = _data_dir()
 
-    snp = []
-    minor_alleles = []
-    major_alleles = []
-
-    snp_path = os.path.join(base, snp_file_name)
-    check_file(snp_path)
-    with open(snp_path, "r", encoding="utf-8", errors="replace") as f:
-        for line in f:
-            parts = line.strip().split()
-            if len(parts) >= 3:
-                snp.append(parts[0])
-                # .F matrix is frequency of second allele (column 3); treat as minor for likelihood
-                major_alleles.append(parts[1])
-                minor_alleles.append(parts[2])
-
+    # Load frequency matrix first (smaller; one row per SNP).
     freq_path = os.path.join(base, frequency_file_name)
     check_file(freq_path)
     frequency = []
@@ -146,21 +137,39 @@ def read_model(model):
             row = [float(x) for x in line.split()]
             if row:
                 frequency.append(row)
+    n = len(frequency)
+
+    # Load only the first n SNP lines to match frequency rows (avoids loading huge alleles file on low-RAM).
+    snp = []
+    minor_alleles = []
+    major_alleles = []
+    snp_path = os.path.join(base, snp_file_name)
+    check_file(snp_path)
+    with open(snp_path, "r", encoding="utf-8", errors="replace") as f:
+        for i, line in enumerate(f):
+            if i >= n:
+                break
+            parts = line.strip().split()
+            if len(parts) >= 3:
+                snp.append(parts[0])
+                major_alleles.append(parts[1])
+                minor_alleles.append(parts[2])
 
     import numpy as np
-    # Align lengths: frequency matrix must have one row per SNP (same order as alleles).
     n_snp = len(snp)
-    n_freq = len(frequency)
-    n = min(n_snp, n_freq)
-    if n_freq != n_snp:
+    if n_snp < n:
         import logging
         logging.getLogger(__name__).warning(
-            "K36 alleles file has %d SNPs but frequency file has %d rows; using first %d.",
-            n_snp, n_freq, n,
+            "K36 alleles has %d lines but frequency has %d rows; using %d.",
+            n_snp, n, n_snp,
         )
-    return (
-        np.array(snp[:n]),
-        np.array(minor_alleles[:n]),
-        np.array(major_alleles[:n]),
-        np.array(frequency[:n]),
+        n = n_snp
+        frequency = frequency[:n]
+    result = (
+        np.array(snp),
+        np.array(minor_alleles),
+        np.array(major_alleles),
+        np.array(frequency),
     )
+    _model_cache[model] = result
+    return result

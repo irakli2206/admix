@@ -40,6 +40,9 @@ MAX_DECOMPRESSED_BYTES = _max_decompressed_mb * 1024 * 1024
 MAX_CONCURRENT_CONVERSIONS = 1
 _conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
 
+# Timeout for K36 conversion (seconds). Prevents hanging on low-memory (e.g. Render 512 MB).
+K36_TIMEOUT = int(os.environ.get("K36_CONVERSION_TIMEOUT", "120"))
+
 # Built-in K36: requires data/K36.alleles and data/K36.36.F
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _K36_ALLELES_PATH = os.path.join(_BASE_DIR, "data", "K36.alleles")
@@ -246,8 +249,14 @@ async def process_dna(
                     detail="K36 data missing. Add data/K36.alleles and data/K36.36.F to the server.",
                 )
             try:
-                clean_results = await asyncio.to_thread(
-                    _run_builtin_raw_to_k36, temp_path, vendor
+                clean_results = await asyncio.wait_for(
+                    asyncio.to_thread(_run_builtin_raw_to_k36, temp_path, vendor),
+                    timeout=K36_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"K36 conversion timed out after {K36_TIMEOUT}s. Try a smaller file or set K36_CONVERSION_TIMEOUT.",
                 )
             except Exception as e:
                 logger.exception("K36 conversion failed: %s", e)
@@ -371,8 +380,14 @@ async def process_dna_to_g25(
                     detail="K36 data missing. Add data/K36.alleles and data/K36.36.F to the server.",
                 )
             try:
-                k36_results = await asyncio.to_thread(
-                    _run_builtin_raw_to_k36, temp_path, vendor
+                k36_results = await asyncio.wait_for(
+                    asyncio.to_thread(_run_builtin_raw_to_k36, temp_path, vendor),
+                    timeout=K36_TIMEOUT,
+                )
+            except asyncio.TimeoutError:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"K36 conversion timed out after {K36_TIMEOUT}s. Try a smaller file or set K36_CONVERSION_TIMEOUT.",
                 )
             except Exception as e:
                 logger.exception("K36 conversion failed (raw-to-g25): %s", e)
