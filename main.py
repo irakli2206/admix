@@ -2,12 +2,18 @@ from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Req
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 import asyncio
 import logging
 import os
-import shutil
 import subprocess
+import tempfile
+import zlib
+
+try:
+    import resource
+except ImportError:
+    resource = None  # Windows
 
 import numpy as np
 import pandas as pd
@@ -27,17 +33,44 @@ def _get_rss_mb() -> float:
         pass
     return 0.0
 
+
+def _get_memory_debug() -> Optional[Dict[str, float]]:
+    """
+    After an admix subprocess has just exited, return its max RSS + current process RSS
+    so we can estimate peak RAM used. Linux only (resource module). Use when testing locally.
+    """
+    if not resource or not hasattr(resource, "RUSAGE_CHILDREN"):
+        return None
+    try:
+        # ru_maxrss is in KB on Linux
+        child_max_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
+        child_max_mb = child_max_kb / 1024.0
+        python_mb = _get_rss_mb()
+        return {
+            "admix_child_max_mb": round(child_max_mb, 2),
+            "python_rss_mb": round(python_mb, 2),
+            "estimated_peak_mb": round(child_max_mb + python_mb, 2),
+        }
+    except (OSError, ValueError, AttributeError):
+        return None
+
 app = FastAPI()
 
 # Vendor values supported by admix -v (see README Raw Data Format)
 VENDOR_CHOICES = Literal["23andme", "ancestry", "ftdna", "ftdna2", "wegene", "myheritage"]
 
-# Max upload size to avoid OOM on low-memory hosts (e.g. Render free tier). 30 MB.
-MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+# Max request body size. We stream to disk.
+MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
+# Max file size we pass to admix. Default 50 MB so local/Swagger works; on Render set env MAX_DECOMPRESSED_MB=10 to avoid OOM.
+_max_decompressed_mb = int(os.environ.get("MAX_DECOMPRESSED_MB", "50"))
+MAX_DECOMPRESSED_BYTES = _max_decompressed_mb * 1024 * 1024
+
+# Timeout for admix subprocess (seconds). Prevents hanging if admix is slow or stuck.
+ADMIX_TIMEOUT = 120
 
 # Max concurrent raw-to-K36 / raw-to-G25 conversions (each runs admix subprocess + memory).
-# On 512 MB RAM, 2 is safe; increase if you have more memory.
-MAX_CONCURRENT_CONVERSIONS = 2
+# On 512 MB RAM use 1 so we don't run two admix processes at once.
+MAX_CONCURRENT_CONVERSIONS = 1
 _conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
 
 
@@ -130,30 +163,95 @@ def debug_memory():
 
 
 def check_upload_size(request: Request) -> None:
-    """Reject uploads over MAX_UPLOAD_BYTES to avoid OOM on low-RAM servers."""
+    """Reject request body over MAX_UPLOAD_BYTES."""
     content_length = request.headers.get("content-length")
     if content_length:
         try:
             if int(content_length) > MAX_UPLOAD_BYTES:
                 raise HTTPException(
                     status_code=413,
-                    detail=f"File too large. Max size is {MAX_UPLOAD_BYTES // (1024*1024)} MB.",
+                    detail=f"Request too large. Max {MAX_UPLOAD_BYTES // (1024*1024)} MB per request.",
                 )
         except ValueError:
             pass
+
+
+async def write_upload_to_temp(
+    file: UploadFile,
+    temp_path: str,
+    compressed: bool = False,
+) -> float:
+    """
+    Stream uploaded file to temp_path. If compressed=True, stream-decompress gzip.
+    Enforces MAX_DECOMPRESSED_BYTES on written size. Returns size written in MB.
+    """
+    size = 0
+    try:
+        if compressed:
+            with open(temp_path, "wb") as out:
+                d = zlib.decompressobj(zlib.MAX_WBITS + 32)  # gzip
+                while True:
+                    chunk = await file.read(256 * 1024)
+                    if not chunk:
+                        out.write(d.flush())
+                        break
+                    out.write(d.decompress(chunk))
+                    size = out.tell()
+                    if size > MAX_DECOMPRESSED_BYTES:
+                        out.close()
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File is too large to process on this server (max {MAX_DECOMPRESSED_BYTES // (1024*1024)} MB). Server has limited RAM; use a smaller export or upgrade the plan.",
+                        )
+                size = out.tell()
+        else:
+            with open(temp_path, "wb") as out:
+                while True:
+                    chunk = await file.read(512 * 1024)
+                    if not chunk:
+                        break
+                    size += len(chunk)
+                    if size > MAX_DECOMPRESSED_BYTES:
+                        out.close()
+                        if os.path.exists(temp_path):
+                            os.remove(temp_path)
+                        raise HTTPException(
+                            status_code=413,
+                            detail=f"File is too large to process on this server (max {MAX_DECOMPRESSED_BYTES // (1024*1024)} MB). Server has limited RAM; use a smaller export or upgrade the plan.",
+                        )
+                    out.write(chunk)
+        return size / (1024 * 1024)
+    except HTTPException:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+    except Exception:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
 
 
 @app.post("/raw-to-k36")
 async def process_dna(
     file: UploadFile = File(...),
     vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
+    compressed: bool = Form(False, description="Set true if the uploaded file is gzip-compressed (.gz)"),
     _: None = Depends(check_upload_size),
 ):
-    temp_path = f"temp_{file.filename}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+    if not file.filename or not file.filename.strip():
+        raise HTTPException(status_code=400, detail="No file selected. Choose a file to upload.")
+    base_name = file.filename.rstrip(".gz") if file.filename.lower().endswith(".gz") else file.filename
+    suffix = os.path.splitext(base_name)[1] or ".txt"
+    fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix="raw2k36_")
+    os.close(fd)
+    try:
+        file_size_mb = await write_upload_to_temp(file, temp_path, compressed)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
     try:
         async with _conversion_semaphore:
             rss_before = _get_rss_mb()
@@ -162,13 +260,25 @@ async def process_dna(
                 rss_before,
                 file_size_mb,
             )
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=ADMIX_TIMEOUT,
+                )
+            except FileNotFoundError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="admix CLI not found. Install with: pip install admix",
+                )
+            except subprocess.TimeoutExpired:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Conversion timed out after {ADMIX_TIMEOUT}s. Try a smaller file.",
+                )
             rss_after = _get_rss_mb()
             logger.info("Admix finished (raw-to-k36): rss_mb=%.2f", rss_after)
 
@@ -179,10 +289,19 @@ async def process_dna(
                 name, value = line.split(":")
                 clean_results[name.strip()] = float(value.replace("%", "").strip())
 
-        return {"status": "success", "results": clean_results}
+        out: Dict = {"status": "success", "results": clean_results}
+        mem = _get_memory_debug()
+        if mem:
+            out["memory_debug"] = mem
+            logger.info(
+                "Memory (raw-to-k36): admix_child_max_mb=%.2f estimated_peak_mb=%.2f",
+                mem["admix_child_max_mb"],
+                mem["estimated_peak_mb"],
+            )
+        return out
 
     except subprocess.CalledProcessError as e:
-        return {"status": "error", "message": e.stderr}
+        return {"status": "error", "message": e.stderr or e.stdout or str(e)}
 
     finally:
         if os.path.exists(temp_path):
@@ -265,16 +384,26 @@ async def convert_k36_to_g25(data: K36Input):
 async def process_dna_to_g25(
     file: UploadFile = File(...),
     vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
+    compressed: bool = Form(False, description="Set true if the uploaded file is gzip-compressed (.gz)"),
     _: None = Depends(check_upload_size),
 ):
     """
     Full pipeline: Raw DNA -> K36 -> Simulated G25 coordinates.
+    Max request size 50 MB (raw or gzip). Set compressed=true for .gz uploads. Processing limit is MAX_DECOMPRESSED_MB (env, default 5).
+    In Swagger: click "Try it out", choose a file, then Execute. Conversion can take 30–120 s for larger files.
     """
-    temp_path = f"temp_{file.filename}"
-    with open(temp_path, "wb") as buffer:
-        shutil.copyfileobj(file.file, buffer)
-
-    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
+    if not file.filename or not file.filename.strip():
+        raise HTTPException(status_code=400, detail="No file selected. Choose a file to upload.")
+    base_name = file.filename.rstrip(".gz") if file.filename.lower().endswith(".gz") else file.filename
+    suffix = os.path.splitext(base_name)[1] or ".txt"
+    fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix="raw2g25_")
+    os.close(fd)
+    try:
+        file_size_mb = await write_upload_to_temp(file, temp_path, compressed)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
     try:
         async with _conversion_semaphore:
             rss_before = _get_rss_mb()
@@ -283,15 +412,35 @@ async def process_dna_to_g25(
                 rss_before,
                 file_size_mb,
             )
-            result = await asyncio.to_thread(
-                subprocess.run,
-                ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
-                capture_output=True,
-                text=True,
-                check=True,
-            )
+            try:
+                result = await asyncio.to_thread(
+                    subprocess.run,
+                    ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
+                    capture_output=True,
+                    text=True,
+                    check=True,
+                    timeout=ADMIX_TIMEOUT,
+                )
+            except FileNotFoundError:
+                raise HTTPException(
+                    status_code=503,
+                    detail="admix CLI not found. Install with: pip install admix",
+                )
+            except subprocess.TimeoutExpired:
+                raise HTTPException(
+                    status_code=504,
+                    detail=f"Conversion timed out after {ADMIX_TIMEOUT}s. Try a smaller file.",
+                )
             rss_after = _get_rss_mb()
             logger.info("Admix finished (raw-to-g25): rss_mb=%.2f", rss_after)
+
+        mem = _get_memory_debug()
+        if mem:
+            logger.info(
+                "Memory (raw-to-g25): admix_child_max_mb=%.2f estimated_peak_mb=%.2f",
+                mem["admix_child_max_mb"],
+                mem["estimated_peak_mb"],
+            )
 
         # Parse K36 output
         k36_results = {}
@@ -309,16 +458,19 @@ async def process_dna_to_g25(
         sample_name = file.filename.replace(".txt", "")
         vahaduo_string = f"{sample_name}," + ",".join(str(c) for c in g25_coords)
 
-        return {
+        out = {
             "status": "success",
             "k36_results": k36_results,
             "g25_coordinates": g25_coords,
             "vahaduo_format": vahaduo_string,
-            "note": "These are SIMULATED G25 coordinates based on K36 regression. For official G25, use g25requests.app"
+            "note": "These are SIMULATED G25 coordinates based on K36 regression. For official G25, use g25requests.app",
         }
+        if mem:
+            out["memory_debug"] = mem
+        return out
 
     except subprocess.CalledProcessError as e:
-        return {"status": "error", "message": e.stderr}
+        return {"status": "error", "message": e.stderr or e.stdout or str(e)}
 
     finally:
         if os.path.exists(temp_path):
