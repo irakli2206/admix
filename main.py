@@ -3,12 +3,29 @@ from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import Dict, List, Literal
+import asyncio
+import logging
 import os
 import shutil
 import subprocess
 
 import numpy as np
 import pandas as pd
+
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
+
+
+def _get_rss_mb() -> float:
+    """Current process RSS in MB (Linux only; 0 on other platforms)."""
+    try:
+        with open("/proc/self/status", encoding="utf-8") as f:
+            for line in f:
+                if line.startswith("VmRSS:"):
+                    return int(line.split()[1]) / 1024.0  # kB -> MB
+    except (FileNotFoundError, OSError, ValueError):
+        pass
+    return 0.0
 
 app = FastAPI()
 
@@ -17,6 +34,11 @@ VENDOR_CHOICES = Literal["23andme", "ancestry", "ftdna", "ftdna2", "wegene", "my
 
 # Max upload size to avoid OOM on low-memory hosts (e.g. Render free tier). 30 MB.
 MAX_UPLOAD_BYTES = 30 * 1024 * 1024
+
+# Max concurrent raw-to-K36 / raw-to-G25 conversions (each runs admix subprocess + memory).
+# On 512 MB RAM, 2 is safe; increase if you have more memory.
+MAX_CONCURRENT_CONVERSIONS = 2
+_conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
 
 
 _K36_G25_MATRIX = None
@@ -94,6 +116,19 @@ def home_head():
     return Response(status_code=200)
 
 
+@app.get("/debug/memory")
+def debug_memory():
+    """
+    Return current process RSS (MB). Use to confirm deployment and baseline memory.
+    Total RAM used = this process + admix subprocess during conversion.
+    """
+    rss = _get_rss_mb()
+    return {
+        "rss_mb": round(rss, 2),
+        "note": "RSS is this process only. During conversion, admix subprocess adds more; check Render logs for 'Conversion started/finished' to see RSS growth.",
+    }
+
+
 def check_upload_size(request: Request) -> None:
     """Reject uploads over MAX_UPLOAD_BYTES to avoid OOM on low-RAM servers."""
     content_length = request.headers.get("content-length")
@@ -118,13 +153,24 @@ async def process_dna(
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
     try:
-        result = subprocess.run(
-            ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        async with _conversion_semaphore:
+            rss_before = _get_rss_mb()
+            logger.info(
+                "Conversion started (raw-to-k36): rss_mb=%.2f file_size_mb=%.2f",
+                rss_before,
+                file_size_mb,
+            )
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            rss_after = _get_rss_mb()
+            logger.info("Admix finished (raw-to-k36): rss_mb=%.2f", rss_after)
 
         # Parse output into JSON
         clean_results = {}
@@ -228,14 +274,24 @@ async def process_dna_to_g25(
     with open(temp_path, "wb") as buffer:
         shutil.copyfileobj(file.file, buffer)
 
+    file_size_mb = os.path.getsize(temp_path) / (1024 * 1024)
     try:
-        # Step 1: Run admix to get K36
-        result = subprocess.run(
-            ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
-            capture_output=True,
-            text=True,
-            check=True,
-        )
+        async with _conversion_semaphore:
+            rss_before = _get_rss_mb()
+            logger.info(
+                "Conversion started (raw-to-g25): rss_mb=%.2f file_size_mb=%.2f",
+                rss_before,
+                file_size_mb,
+            )
+            result = await asyncio.to_thread(
+                subprocess.run,
+                ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
+                capture_output=True,
+                text=True,
+                check=True,
+            )
+            rss_after = _get_rss_mb()
+            logger.info("Admix finished (raw-to-g25): rss_mb=%.2f", rss_after)
 
         # Parse K36 output
         k36_results = {}
