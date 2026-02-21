@@ -2,18 +2,12 @@ from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Req
 from fastapi.responses import Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, List, Literal, Optional
+from typing import Dict, List, Literal
 import asyncio
 import logging
 import os
-import subprocess
 import tempfile
 import zlib
-
-try:
-    import resource
-except ImportError:
-    resource = None  # Windows
 
 import numpy as np
 import pandas as pd
@@ -34,44 +28,36 @@ def _get_rss_mb() -> float:
     return 0.0
 
 
-def _get_memory_debug() -> Optional[Dict[str, float]]:
-    """
-    After an admix subprocess has just exited, return its max RSS + current process RSS
-    so we can estimate peak RAM used. Linux only (resource module). Use when testing locally.
-    """
-    if not resource or not hasattr(resource, "RUSAGE_CHILDREN"):
-        return None
-    try:
-        # ru_maxrss is in KB on Linux
-        child_max_kb = resource.getrusage(resource.RUSAGE_CHILDREN).ru_maxrss
-        child_max_mb = child_max_kb / 1024.0
-        python_mb = _get_rss_mb()
-        return {
-            "admix_child_max_mb": round(child_max_mb, 2),
-            "python_rss_mb": round(python_mb, 2),
-            "estimated_peak_mb": round(child_max_mb + python_mb, 2),
-        }
-    except (OSError, ValueError, AttributeError):
-        return None
-
 app = FastAPI()
 
-# Vendor values supported by admix -v (see README Raw Data Format)
 VENDOR_CHOICES = Literal["23andme", "ancestry", "ftdna", "ftdna2", "wegene", "myheritage"]
 
-# Max request body size. We stream to disk.
 MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
-# Max file size we pass to admix. Default 50 MB so local/Swagger works; on Render set env MAX_DECOMPRESSED_MB=10 to avoid OOM.
+# Max decompressed file size (env MAX_DECOMPRESSED_MB, default 50).
 _max_decompressed_mb = int(os.environ.get("MAX_DECOMPRESSED_MB", "50"))
 MAX_DECOMPRESSED_BYTES = _max_decompressed_mb * 1024 * 1024
 
-# Timeout for admix subprocess (seconds). Prevents hanging if admix is slow or stuck.
-ADMIX_TIMEOUT = 120
-
-# Max concurrent raw-to-K36 / raw-to-G25 conversions (each runs admix subprocess + memory).
-# On 512 MB RAM use 1 so we don't run two admix processes at once.
 MAX_CONCURRENT_CONVERSIONS = 1
 _conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
+
+# Built-in K36: requires data/K36.alleles and data/K36.36.F
+_BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+_K36_ALLELES_PATH = os.path.join(_BASE_DIR, "data", "K36.alleles")
+_K36_FREQ_PATH = os.path.join(_BASE_DIR, "data", "K36.36.F")
+
+
+def _builtin_raw_to_k36_available() -> bool:
+    return os.path.isfile(_K36_ALLELES_PATH) and os.path.isfile(_K36_FREQ_PATH)
+
+
+def _run_builtin_raw_to_k36(raw_path: str, vendor: str) -> Dict[str, float]:
+    """Run in-project K36 MLE; returns dict population_name -> percentage (0–100)."""
+    import admix_models
+    from admix_fraction import admix_fraction
+
+    frac = admix_fraction("K36", vendor, raw_path, tolerance=1e-3)
+    populations = admix_models.populations("K36")
+    return {pop_en: round(100.0 * f, 2) for (pop_en, _), f in zip(populations, frac)}
 
 
 _K36_G25_MATRIX = None
@@ -151,15 +137,8 @@ def home_head():
 
 @app.get("/debug/memory")
 def debug_memory():
-    """
-    Return current process RSS (MB). Use to confirm deployment and baseline memory.
-    Total RAM used = this process + admix subprocess during conversion.
-    """
-    rss = _get_rss_mb()
-    return {
-        "rss_mb": round(rss, 2),
-        "note": "RSS is this process only. During conversion, admix subprocess adds more; check Render logs for 'Conversion started/finished' to see RSS growth.",
-    }
+    """Current process RSS in MB (Linux only; 0 elsewhere)."""
+    return {"rss_mb": round(_get_rss_mb(), 2)}
 
 
 def check_upload_size(request: Request) -> None:
@@ -260,48 +239,25 @@ async def process_dna(
                 rss_before,
                 file_size_mb,
             )
-            try:
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=ADMIX_TIMEOUT,
-                )
-            except FileNotFoundError:
+
+            if not _builtin_raw_to_k36_available():
                 raise HTTPException(
                     status_code=503,
-                    detail="admix CLI not found. Install with: pip install admix",
+                    detail="K36 data missing. Add data/K36.alleles and data/K36.36.F to the server.",
                 )
-            except subprocess.TimeoutExpired:
+            try:
+                clean_results = await asyncio.to_thread(
+                    _run_builtin_raw_to_k36, temp_path, vendor
+                )
+            except Exception as e:
+                logger.exception("K36 conversion failed: %s", e)
                 raise HTTPException(
-                    status_code=504,
-                    detail=f"Conversion timed out after {ADMIX_TIMEOUT}s. Try a smaller file.",
+                    status_code=500,
+                    detail="K36 conversion failed: " + str(e),
                 )
-            rss_after = _get_rss_mb()
-            logger.info("Admix finished (raw-to-k36): rss_mb=%.2f", rss_after)
 
-        # Parse output into JSON
-        clean_results = {}
-        for line in result.stdout.split("\n"):
-            if ":" in line and "%" in line:
-                name, value = line.split(":")
-                clean_results[name.strip()] = float(value.replace("%", "").strip())
-
-        out: Dict = {"status": "success", "results": clean_results}
-        mem = _get_memory_debug()
-        if mem:
-            out["memory_debug"] = mem
-            logger.info(
-                "Memory (raw-to-k36): admix_child_max_mb=%.2f estimated_peak_mb=%.2f",
-                mem["admix_child_max_mb"],
-                mem["estimated_peak_mb"],
-            )
-        return out
-
-    except subprocess.CalledProcessError as e:
-        return {"status": "error", "message": e.stderr or e.stdout or str(e)}
+            logger.info("K36 finished (raw-to-k36): rss_mb=%.2f", _get_rss_mb())
+        return {"status": "success", "results": clean_results}
 
     finally:
         if os.path.exists(temp_path):
@@ -309,39 +265,36 @@ async def process_dna(
 
 
 def normalize_k36_key(key: str) -> str:
-    """Normalize K36 component names to match our matrix keys."""
+    """Normalize K36 component names to match k36_to_g25_weights.csv index."""
     key = key.strip().replace("-", "_").replace(" ", "_")
-    # Handle common variations
-    replacements = {
-        "Indo_Chinese": "Indo_Chinese",
-        "IndoChinese": "Indo_Chinese",
-        "Central African": "Central_African",
-        "East African": "East_African",
-        "West African": "West_African",
-        "North African": "North_African",
-        "Northeast African": "Northeast_African",
-        "South Asian": "South_Asian",
-        "East Asian": "East_Asian",
-        "Central Euro": "Central_Euro",
-        "Eastern Euro": "Eastern_Euro",
-        "East Central Euro": "East_Central_Euro",
-        "East Balkan": "East_Balkan",
-        "East Med": "East_Med",
-        "West Med": "West_Med",
-        "North Sea": "North_Sea",
-        "Near Eastern": "Near_Eastern",
-        "North Atlantic": "North_Atlantic",
-        "North Caucasian": "North_Caucasian",
-        "West Caucasian": "West_Caucasian",
-        "East Central Asian": "East_Central_Asian",
-        "South Central Asian": "South_Central_Asian",
-        "South Chinese": "South_Chinese",
-        "Volga Ural": "Volga_Ural",
+    # Map display variants to matrix row names
+    variants = {
+        "indo chinese": "Indo_Chinese",
+        "central african": "Central_African",
+        "east african": "East_African",
+        "west african": "West_African",
+        "north african": "North_African",
+        "northeast african": "Northeast_African",
+        "south asian": "South_Asian",
+        "east asian": "East_Asian",
+        "central euro": "Central_Euro",
+        "eastern euro": "Eastern_Euro",
+        "east central euro": "East_Central_Euro",
+        "east balkan": "East_Balkan",
+        "east med": "East_Med",
+        "west med": "West_Med",
+        "north sea": "North_Sea",
+        "near eastern": "Near_Eastern",
+        "north atlantic": "North_Atlantic",
+        "north caucasian": "North_Caucasian",
+        "west caucasian": "West_Caucasian",
+        "east central asian": "East_Central_Asian",
+        "south central asian": "South_Central_Asian",
+        "south chinese": "South_Chinese",
+        "volga ural": "Volga_Ural",
     }
-    for old, new in replacements.items():
-        if key.lower().replace("_", " ") == old.lower().replace("_", " "):
-            return new
-    return key
+    k = key.lower().replace("_", " ")
+    return variants.get(k, key)
 
 
 @app.post("/k36-to-g25")
@@ -412,44 +365,25 @@ async def process_dna_to_g25(
                 rss_before,
                 file_size_mb,
             )
-            try:
-                result = await asyncio.to_thread(
-                    subprocess.run,
-                    ["admix", "-f", temp_path, "-v", vendor, "-m", "K36"],
-                    capture_output=True,
-                    text=True,
-                    check=True,
-                    timeout=ADMIX_TIMEOUT,
-                )
-            except FileNotFoundError:
+            if not _builtin_raw_to_k36_available():
                 raise HTTPException(
                     status_code=503,
-                    detail="admix CLI not found. Install with: pip install admix",
+                    detail="K36 data missing. Add data/K36.alleles and data/K36.36.F to the server.",
                 )
-            except subprocess.TimeoutExpired:
+            try:
+                k36_results = await asyncio.to_thread(
+                    _run_builtin_raw_to_k36, temp_path, vendor
+                )
+            except Exception as e:
+                logger.exception("K36 conversion failed (raw-to-g25): %s", e)
                 raise HTTPException(
-                    status_code=504,
-                    detail=f"Conversion timed out after {ADMIX_TIMEOUT}s. Try a smaller file.",
+                    status_code=500,
+                    detail="K36 conversion failed: " + str(e),
                 )
-            rss_after = _get_rss_mb()
-            logger.info("Admix finished (raw-to-g25): rss_mb=%.2f", rss_after)
 
-        mem = _get_memory_debug()
-        if mem:
-            logger.info(
-                "Memory (raw-to-g25): admix_child_max_mb=%.2f estimated_peak_mb=%.2f",
-                mem["admix_child_max_mb"],
-                mem["estimated_peak_mb"],
-            )
+            logger.info("K36 finished (raw-to-g25): rss_mb=%.2f", _get_rss_mb())
 
-        # Parse K36 output
-        k36_results = {}
-        for line in result.stdout.split("\n"):
-            if ":" in line and "%" in line:
-                name, value = line.split(":")
-                k36_results[name.strip()] = float(value.replace("%", "").strip())
-
-        # Step 2: Convert K36 to G25 using the regression matrix
+        # K36 -> G25 regression
         user_k36_vector = k36_vector_from_dict(k36_results)
         g25_coords = k36_to_g25(user_k36_vector)
 
@@ -458,19 +392,13 @@ async def process_dna_to_g25(
         sample_name = file.filename.replace(".txt", "")
         vahaduo_string = f"{sample_name}," + ",".join(str(c) for c in g25_coords)
 
-        out = {
+        return {
             "status": "success",
             "k36_results": k36_results,
             "g25_coordinates": g25_coords,
             "vahaduo_format": vahaduo_string,
-            "note": "These are SIMULATED G25 coordinates based on K36 regression. For official G25, use g25requests.app",
+            "note": "SIMULATED G25 from K36 regression. For official G25 use g25requests.app",
         }
-        if mem:
-            out["memory_debug"] = mem
-        return out
-
-    except subprocess.CalledProcessError as e:
-        return {"status": "error", "message": e.stderr or e.stdout or str(e)}
 
     finally:
         if os.path.exists(temp_path):
