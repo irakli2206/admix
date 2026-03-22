@@ -30,6 +30,46 @@
    - Open port 8000 in the VPS firewall.  
    - For HTTPS, put Caddy or Nginx in front (e.g. Caddy: `caddy reverse-proxy --from yourdomain.com --to localhost:8000`).
 
+### Progress (SSE) for a UI progress bar
+
+`POST /raw-to-g25/stream` returns **`text/event-stream`**. Each line is `data: <JSON>\n\n` with fields like:
+
+- **`percent`** — 0–100 (rough stages: read → genotypes → optimizer → G25)
+- **`stage`** — short label (`read`, `genotypes`, `optimizer`, `g25_regression`, …)
+- **`done`** — `true` on the final event (then **`result`** has the same payload as `POST /raw-to-g25`, or **`error`** on failure)
+
+`EventSource` only supports GET, so use **`fetch()` + read the body stream** and parse `data:` lines. Example:
+
+```javascript
+const form = new FormData();
+form.append("file", fileInput.files[0]);
+form.append("vendor", "23andme");
+form.append("sample_name", "me");
+
+const res = await fetch("/raw-to-g25/stream", { method: "POST", body: form });
+const reader = res.body.getReader();
+const dec = new TextDecoder();
+let buf = "";
+while (true) {
+  const { value, done } = await reader.read();
+  if (done) break;
+  buf += dec.decode(value, { stream: true });
+  let i;
+  while ((i = buf.indexOf("\n\n")) >= 0) {
+    const block = buf.slice(0, i);
+    buf = buf.slice(i + 2);
+    const line = block.split("\n").find((l) => l.startsWith("data: "));
+    if (!line) continue;
+    const json = JSON.parse(line.slice(6).trim());
+    if (json.percent != null) setProgressBar(json.percent);
+    if (json.done && json.result) setFinalResult(json.result);
+    if (json.done && json.error) showError(json.error);
+  }
+}
+```
+
+Swagger often won’t preview the stream; test with the snippet above or `curl -N`.
+
 Done. One small server, no RAM limit, ~$5/month.
 
 ---

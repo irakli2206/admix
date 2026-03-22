@@ -1,13 +1,16 @@
 from fastapi import Depends, FastAPI, UploadFile, File, Form, HTTPException, Request
-from fastapi.responses import Response
+from fastapi.responses import Response, StreamingResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
-from typing import Dict, List, Literal
+from typing import Dict, List, Literal, Optional
 import asyncio
+import json
 import logging
 import os
 import tempfile
 import zlib
+
+from progress_tracker import ConversionProgress
 
 import numpy as np
 import pandas as pd
@@ -54,14 +57,54 @@ def _builtin_raw_to_k36_available() -> bool:
     return os.path.isfile(_K36_ALLELES_PATH) and os.path.isfile(_K36_FREQ_PATH)
 
 
-def _run_builtin_raw_to_k36(raw_path: str, vendor: str) -> Dict[str, float]:
+def _run_builtin_raw_to_k36(
+    raw_path: str,
+    vendor: str,
+    progress: Optional[ConversionProgress] = None,
+) -> Dict[str, float]:
     """Run in-project K36 MLE; returns dict population_name -> percentage (0–100)."""
     import admix_models
     from admix_fraction import admix_fraction
 
-    frac = admix_fraction("K36", vendor, raw_path, tolerance=1e-3)
+    frac = admix_fraction(
+        "K36", vendor, raw_path, tolerance=1e-3, progress=progress
+    )
     populations = admix_models.populations("K36")
     return {pop_en: round(100.0 * f, 2) for (pop_en, _), f in zip(populations, frac)}
+
+
+def _g25_response_dict(k36_results: Dict[str, float], sample_name: str) -> Dict:
+    """Build same JSON body as POST /raw-to-g25 success."""
+    user_k36_vector = k36_vector_from_dict(k36_results)
+    g25_coords = k36_to_g25(user_k36_vector)
+    g25_coords = [round(c, 6) for c in g25_coords]
+    vahaduo_string = f"{sample_name}," + ",".join(str(c) for c in g25_coords)
+    return {
+        "status": "success",
+        "k36_results": k36_results,
+        "g25_coordinates": g25_coords,
+        "vahaduo_format": vahaduo_string,
+        "note": "SIMULATED G25 from K36 regression. For official G25 use g25requests.app",
+    }
+
+
+def _sync_raw_to_g25_with_progress(
+    temp_path: str, vendor: str, sample_name: str, progress: ConversionProgress
+) -> None:
+    """Runs in a worker thread; updates progress; sets complete or fail."""
+    try:
+        if not _builtin_raw_to_k36_available():
+            raise RuntimeError(
+                "K36 data missing. Add data/K36.alleles and data/K36.36.F to the server."
+            )
+        progress.set(1.0, "starting")
+        k36_results = _run_builtin_raw_to_k36(temp_path, vendor, progress=progress)
+        progress.bump(92.0, "g25_regression")
+        payload = _g25_response_dict(k36_results, sample_name)
+        progress.complete(payload)
+    except Exception as e:
+        progress.fail(str(e))
+        logger.exception("raw-to-g25 progress worker failed: %s", e)
 
 
 _K36_G25_MATRIX = None
@@ -399,23 +442,99 @@ async def process_dna_to_g25(
 
             logger.info("K36 finished (raw-to-g25): rss_mb=%.2f", _get_rss_mb())
 
-        # K36 -> G25 regression
-        user_k36_vector = k36_vector_from_dict(k36_results)
-        g25_coords = k36_to_g25(user_k36_vector)
-
-        g25_coords = [round(c, 6) for c in g25_coords]
-
         sample_name = file.filename.replace(".txt", "")
-        vahaduo_string = f"{sample_name}," + ",".join(str(c) for c in g25_coords)
-
-        return {
-            "status": "success",
-            "k36_results": k36_results,
-            "g25_coordinates": g25_coords,
-            "vahaduo_format": vahaduo_string,
-            "note": "SIMULATED G25 from K36 regression. For official G25 use g25requests.app",
-        }
+        return _g25_response_dict(k36_results, sample_name)
 
     finally:
         if os.path.exists(temp_path):
             os.remove(temp_path)
+
+
+@app.post("/raw-to-g25/stream")
+async def raw_to_g25_stream(
+    file: UploadFile = File(...),
+    vendor: VENDOR_CHOICES = Form(
+        "23andme",
+        description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage",
+    ),
+    compressed: bool = Form(
+        False, description="Set true if the uploaded file is gzip-compressed (.gz)"
+    ),
+    _: None = Depends(check_upload_size),
+):
+    """
+    Same pipeline as `/raw-to-g25`, but the response is **Server-Sent Events** (SSE).
+
+    Each line is `data: {json}\\n\\n`. Fields evolve like:
+    - `progress` (0–100), `stage` (e.g. reading_raw, genotypes, optimizing, g25_regression, complete)
+    - `done`: true when finished
+    - `result`: full success payload (same as `/raw-to-g25`) when successful
+    - `error`: message when failed
+
+    **Frontend:** `EventSource` only supports GET; use `fetch()` with `response.body.getReader()`
+    and parse `data: ` lines, or see README / docs for a small example.
+    """
+    if not file.filename or not file.filename.strip():
+        raise HTTPException(
+            status_code=400, detail="No file selected. Choose a file to upload."
+        )
+    base_name = (
+        file.filename.rstrip(".gz")
+        if file.filename.lower().endswith(".gz")
+        else file.filename
+    )
+    suffix = os.path.splitext(base_name)[1] or ".txt"
+    fd, temp_path = tempfile.mkstemp(suffix=suffix, prefix="raw2g25s_")
+    os.close(fd)
+    try:
+        file_size_mb = await write_upload_to_temp(file, temp_path, compressed)
+    except Exception:
+        if os.path.exists(temp_path):
+            os.remove(temp_path)
+        raise
+
+    sample_name = file.filename.replace(".txt", "")
+
+    async def sse_gen():
+        try:
+            async with _conversion_semaphore:
+                logger.info(
+                    "raw-to-g25/stream: rss_mb=%.2f file_size_mb=%.2f",
+                    _get_rss_mb(),
+                    file_size_mb,
+                )
+                progress = ConversionProgress()
+                loop = asyncio.get_running_loop()
+                fut = loop.run_in_executor(
+                    None,
+                    lambda: _sync_raw_to_g25_with_progress(
+                        temp_path, vendor, sample_name, progress
+                    ),
+                )
+                deadline = loop.time() + K36_TIMEOUT + 90
+                while True:
+                    await asyncio.sleep(0.15)
+                    snap = progress.snapshot()
+                    yield f"data: {json.dumps(snap)}\n\n"
+                    if snap.get("done"):
+                        break
+                    if loop.time() > deadline:
+                        yield f"data: {json.dumps({'done': True, 'error': 'stream_timeout', 'progress': snap.get('progress'), 'stage': snap.get('stage')})}\n\n"
+                        break
+                try:
+                    await asyncio.wait_for(fut, timeout=120)
+                except asyncio.TimeoutError:
+                    logger.warning("raw-to-g25/stream executor wait timed out")
+        finally:
+            if os.path.exists(temp_path):
+                os.remove(temp_path)
+
+    return StreamingResponse(
+        sse_gen(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )

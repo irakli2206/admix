@@ -2,15 +2,26 @@
 Maximum-likelihood admixture estimation from genotype counts and population allele frequencies.
 """
 
+from typing import TYPE_CHECKING, Optional
+
 import numpy as np
 import scipy.optimize as optimize
 from raw_data_processing import read_raw_data, read_model
 import admix_models
 
+if TYPE_CHECKING:
+    from progress_tracker import ConversionProgress
+
 _EPS = 1e-10
 
 
-def genotype_matches(genome_data, snp, major_alleles, minor_alleles):
+def genotype_matches(
+    genome_data,
+    snp,
+    major_alleles,
+    minor_alleles,
+    progress: Optional["ConversionProgress"] = None,
+):
     """
     Count major/minor allele copies per model SNP.
     `snp` entries are already lowercased (from cached read_model) to match genome_data keys.
@@ -20,7 +31,12 @@ def genotype_matches(genome_data, snp, major_alleles, minor_alleles):
     g_major2 = np.zeros(n, dtype=float)
     g_minor1 = np.zeros(n, dtype=float)
     g_minor2 = np.zeros(n, dtype=float)
+    report_every = max(1, n // 40)  # ~40 updates across the loop
     for i in range(n):
+        if progress is not None and i > 0 and i % report_every == 0:
+            # Map genotype pass to ~8%–28% of overall job (caller scales stages)
+            p = 8.0 + (20.0 * i / n)
+            progress.bump(p, "genotypes")
         gt = genome_data.get(snp[i], "-")
         if len(gt) >= 1 and gt[0] in "ATGC":
             a1 = gt[0]
@@ -45,15 +61,25 @@ def likelihood(g_major, g_minor, frequency, admixture_fraction):
     return -(l1 + l2)
 
 
-def admix_fraction(model, raw_data_format, raw_data_file=None, tolerance=1e-3):
+def admix_fraction(
+    model,
+    raw_data_format,
+    raw_data_file=None,
+    tolerance=1e-3,
+    progress: Optional["ConversionProgress"] = None,
+):
     """
     Compute admixture proportions via MLE.
     Returns 1D array of length n_populations (fractions sum to 1).
     """
+    if progress is not None:
+        progress.bump(2.0, "reading_raw")
     genome_data = read_raw_data(raw_data_format, raw_data_file)
+    if progress is not None:
+        progress.bump(6.0, "loading_model")
     snp, minor_alleles, major_alleles, frequency = read_model(model)
     g_major, g_minor = genotype_matches(
-        genome_data, snp, major_alleles, minor_alleles
+        genome_data, snp, major_alleles, minor_alleles, progress=progress
     )
 
     has_call = (g_major + g_minor) > 0
@@ -76,6 +102,16 @@ def admix_fraction(model, raw_data_format, raw_data_file=None, tolerance=1e-3):
     def objective(af):
         return likelihood(g_major_u, g_minor_u, frequency_u, af)
 
+    opt_iters = [0]
+
+    def opt_callback(_xk):
+        opt_iters[0] += 1
+        if progress is not None:
+            # Optimizer iterations → ~28%–88% (asymptotic so bar keeps moving)
+            it = opt_iters[0]
+            p = min(88.0, 28.0 + 55.0 * (1.0 - np.exp(-it / 25.0)))
+            progress.bump(float(p), "optimizing")
+
     # No jac=True / SLSQP-only path: matches original admix behavior and solution quality.
     result = optimize.minimize(
         objective,
@@ -83,5 +119,8 @@ def admix_fraction(model, raw_data_format, raw_data_file=None, tolerance=1e-3):
         bounds=bounds,
         constraints=constraints,
         tol=float(tolerance),
+        callback=opt_callback if progress is not None else None,
     )
+    if progress is not None:
+        progress.bump(90.0, "k36_done")
     return result.x

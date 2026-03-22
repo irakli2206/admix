@@ -10,7 +10,7 @@ ENV OPENBLAS_NUM_THREADS=1
 ENV MKL_NUM_THREADS=1
 ENV OMP_NUM_THREADS=1
 
-COPY main.py admix_models.py admix_fraction.py raw_data_processing.py k36_to_g25_weights.csv ./
+COPY main.py admix_models.py admix_fraction.py raw_data_processing.py progress_tracker.py k36_to_g25_weights.csv ./
 COPY data/ data/
 
 EXPOSE 8000
