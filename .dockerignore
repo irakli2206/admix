@@ -1,0 +1,10 @@
+.git
+__pycache__
+*.pyc
+venv
+.venv
+*.md
+!DEPLOY.md
+terminals
+agent-transcripts
+.cursor

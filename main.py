@@ -37,7 +37,8 @@ MAX_UPLOAD_BYTES = 50 * 1024 * 1024  # 50 MB
 _max_decompressed_mb = int(os.environ.get("MAX_DECOMPRESSED_MB", "50"))
 MAX_DECOMPRESSED_BYTES = _max_decompressed_mb * 1024 * 1024
 
-MAX_CONCURRENT_CONVERSIONS = 1
+# How many raw-to-K36 / raw-to-G25 jobs may run at once. Default 2: 4 often causes 504s/timeouts on 4 vCPU (BLAS + optimize pile-up).
+MAX_CONCURRENT_CONVERSIONS = int(os.environ.get("MAX_CONCURRENT_CONVERSIONS", "2"))
 _conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
 
 # Timeout for K36 conversion (seconds). Prevents hanging on low-memory (e.g. Render 512 MB).
