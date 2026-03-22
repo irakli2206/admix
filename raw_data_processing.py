@@ -165,8 +165,12 @@ def read_model(model):
         )
         n = n_snp
         frequency = frequency[:n]
+
+    # Pre-lowercase SNP IDs once so genotype_matches doesn't call .lower() 26k times per request.
+    snp_lower = [s.strip().lower() for s in snp]
+
     result = (
-        np.array(snp),
+        np.array(snp_lower),
         np.array(minor_alleles),
         np.array(major_alleles),
         np.array(frequency),

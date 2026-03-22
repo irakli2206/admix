@@ -1,0 +1,17 @@
+# Dev: one command, code hot-reloads — no rebuild after every .py edit
+#   docker compose -f docker-compose.dev.yml up --build
+# First time or after Dockerfile / pip deps change: same command (--build).
+# Code-only changes: save file → uvicorn reloads (rebuild optional).
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    volumes:
+      - .:/app
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+    command: uvicorn main:app --host 0.0.0.0 --port 8000 --reload

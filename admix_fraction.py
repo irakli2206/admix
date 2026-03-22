@@ -7,23 +7,24 @@ import scipy.optimize as optimize
 from raw_data_processing import read_raw_data, read_model
 import admix_models
 
-
-def _canonical_rsid(rsid):
-    """Must match raw_data_processing so lookup works (raw data stored with lowercase key)."""
-    return (rsid if isinstance(rsid, str) else str(rsid)).strip().lower()
+_EPS = 1e-10
 
 
 def genotype_matches(genome_data, snp, major_alleles, minor_alleles):
-    """Count how many major and minor alleles the sample has at each SNP."""
+    """
+    Count major/minor allele copies per model SNP.
+    `snp` entries are already lowercased (from cached read_model) to match genome_data keys.
+    """
     n = len(snp)
     g_major1 = np.zeros(n, dtype=float)
     g_major2 = np.zeros(n, dtype=float)
     g_minor1 = np.zeros(n, dtype=float)
     g_minor2 = np.zeros(n, dtype=float)
     for i in range(n):
-        gt = genome_data.get(_canonical_rsid(snp[i]), "-")
+        gt = genome_data.get(snp[i], "-")
         if len(gt) >= 1 and gt[0] in "ATGC":
-            a1, a2 = gt[0], gt[-1] if len(gt) > 1 else gt[0]
+            a1 = gt[0]
+            a2 = gt[-1] if len(gt) > 1 else gt[0]
             g_major1[i] = 1.0 if a1 == major_alleles[i] else 0.0
             g_major2[i] = 1.0 if a2 == major_alleles[i] else 0.0
             g_minor1[i] = 1.0 if a1 == minor_alleles[i] else 0.0
@@ -31,10 +32,6 @@ def genotype_matches(genome_data, snp, major_alleles, minor_alleles):
     g_major = g_major1 + g_major2
     g_minor = g_minor1 + g_minor2
     return g_major, g_minor
-
-
-# Small epsilon to avoid log(0) in likelihood
-_EPS = 1e-10
 
 
 def likelihood(g_major, g_minor, frequency, admixture_fraction):
@@ -59,7 +56,6 @@ def admix_fraction(model, raw_data_format, raw_data_file=None, tolerance=1e-3):
         genome_data, snp, major_alleles, minor_alleles
     )
 
-    # Use only SNPs where the sample has a call (otherwise no signal -> uniform result)
     has_call = (g_major + g_minor) > 0
     n_used = int(np.sum(has_call))
     if n_used == 0:
@@ -80,6 +76,7 @@ def admix_fraction(model, raw_data_format, raw_data_file=None, tolerance=1e-3):
     def objective(af):
         return likelihood(g_major_u, g_minor_u, frequency_u, af)
 
+    # No jac=True / SLSQP-only path: matches original admix behavior and solution quality.
     result = optimize.minimize(
         objective,
         initial_guess,

@@ -5,9 +5,8 @@ Usage:
   pip install httpx
   python stress_raw_to_g25.py --url http://localhost:8000 --file path/to/raw.txt --users 10
 
-Note: main.py uses MAX_CONCURRENT_CONVERSIONS = 1, so only one conversion runs at a time.
-Other requests wait on the semaphore — good for testing queueing + total time under burst load.
-To stress CPU with real parallelism, temporarily set MAX_CONCURRENT_CONVERSIONS > 1 in main.py.
+Note: main.py defaults MAX_CONCURRENT_CONVERSIONS = 5 (env MAX_CONCURRENT_CONVERSIONS to override).
+Use --users 10 (or higher) so some requests queue and you exercise the semaphore under burst load.
 """
 
 from __future__ import annotations

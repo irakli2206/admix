@@ -31,3 +31,28 @@
    - For HTTPS, put Caddy or Nginx in front (e.g. Caddy: `caddy reverse-proxy --from yourdomain.com --to localhost:8000`).
 
 Done. One small server, no RAM limit, ~$5/month.
+
+---
+
+## Local Docker (faster iteration)
+
+**Option A — one command, reload on save (best for editing code)**  
+From the project folder:
+
+```bash
+docker compose -f docker-compose.dev.yml up --build
+```
+
+- Mounts your repo into the container and runs `uvicorn --reload`: **change `.py` → save → server restarts**, no rebuild.
+- Use `--build` when you change the **Dockerfile** or need to refresh the image; otherwise `docker compose -f docker-compose.dev.yml up` is enough.
+
+**Option B — classic two-step**  
+Rebuilds are **cached**: only layers after a changed `COPY` rerun, so repeat builds are usually quick.
+
+```bash
+docker build -t admix-api .
+docker run --rm -p 8000:8000 admix-api
+```
+
+**Option C — one line (PowerShell)**  
+`docker build -t admix-api .; docker run --rm -p 8000:8000 admix-api`

@@ -1,11 +1,14 @@
-# Cheapest reliable deploy: run on a $5–6 VPS (e.g. Contabo, Hetzner). 2+ GB RAM.
 FROM python:3.11-slim
 
 WORKDIR /app
 
-# App deps (no git dependency for API)
 RUN pip install --no-cache-dir \
     fastapi uvicorn numpy scipy pandas pydantic python-multipart
+
+# Prevent BLAS/OpenMP thread contention when running multiple concurrent conversions.
+ENV OPENBLAS_NUM_THREADS=1
+ENV MKL_NUM_THREADS=1
+ENV OMP_NUM_THREADS=1
 
 COPY main.py admix_models.py admix_fraction.py raw_data_processing.py k36_to_g25_weights.csv ./
 COPY data/ data/
