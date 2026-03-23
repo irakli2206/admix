@@ -34,7 +34,7 @@
 
 `POST /raw-to-g25/stream` returns **`text/event-stream`**. Each line is `data: <JSON>\n\n` with fields like:
 
-- **`percent`** — 0–100 (rough stages: read → genotypes → optimizer → G25)
+- **`progress`** — 0–100 (rough stages: read → genotypes → optimizer → G25)
 - **`stage`** — short label (`read`, `genotypes`, `optimizer`, `g25_regression`, …)
 - **`done`** — `true` on the final event (then **`result`** has the same payload as `POST /raw-to-g25`, or **`error`** on failure)
 
@@ -61,7 +61,7 @@ while (true) {
     const line = block.split("\n").find((l) => l.startsWith("data: "));
     if (!line) continue;
     const json = JSON.parse(line.slice(6).trim());
-    if (json.percent != null) setProgressBar(json.percent);
+    if (json.progress != null) setProgressBar(json.progress);
     if (json.done && json.result) setFinalResult(json.result);
     if (json.done && json.error) showError(json.error);
   }

@@ -165,7 +165,12 @@ class K36Input(BaseModel):
 # Allow your Next.js frontend to talk to this API
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Change this to your Vercel URL later for security
+    allow_origins=[
+        "https://kvali.app",
+        "https://www.kvali.app",
+        "https://staging.kvali.app",
+        "http://localhost:3000",
+    ],
     allow_methods=["*"],
     allow_headers=["*"],
 )
