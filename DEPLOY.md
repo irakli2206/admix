@@ -30,6 +30,27 @@
    - Open port 8000 in the VPS firewall.  
    - For HTTPS, put Caddy or Nginx in front (e.g. Caddy: `caddy reverse-proxy --from yourdomain.com --to localhost:8000`).
 
+### Private endpoint auth (required)
+
+Paid conversion endpoints now require header **`X-Internal-Api-Key`**.
+
+- Protected routes: `POST /raw-to-k36`, `POST /k36-to-g25`, `POST /raw-to-g25`, `POST /raw-to-g25/stream`
+- Set backend env on run:
+
+```bash
+docker run -d --restart unless-stopped -p 8000:8000 \
+  -e INTERNAL_API_KEY="<long-random-secret>" \
+  --name admix admix-api
+```
+
+Call these endpoints from your frontend server/proxy (not directly from browser), and inject:
+
+```http
+X-Internal-Api-Key: <same-secret>
+```
+
+If missing/wrong, backend returns `401`. If `INTERNAL_API_KEY` is not configured, backend returns `503`.
+
 ### Progress (SSE) for a UI progress bar
 
 `POST /raw-to-g25/stream` returns **`text/event-stream`**. Each line is `data: <JSON>\n\n` with fields like:

@@ -7,6 +7,7 @@ import asyncio
 import json
 import logging
 import os
+import secrets
 import tempfile
 import zlib
 
@@ -46,6 +47,8 @@ _conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
 
 # Timeout for K36 conversion (seconds). Prevents hanging on low-memory (e.g. Render 512 MB).
 K36_TIMEOUT = int(os.environ.get("K36_CONVERSION_TIMEOUT", "120"))
+INTERNAL_API_KEY = os.environ.get("INTERNAL_API_KEY", "").strip()
+INTERNAL_API_KEY_HEADER = "X-Internal-Api-Key"
 
 # Built-in K36: requires data/K36.alleles and data/K36.36.F
 _BASE_DIR = os.path.dirname(os.path.abspath(__file__))
@@ -76,15 +79,16 @@ def _run_builtin_raw_to_k36(
 def _g25_response_dict(k36_results: Dict[str, float], sample_name: str) -> Dict:
     """Build same JSON body as POST /raw-to-g25 success."""
     user_k36_vector = k36_vector_from_dict(k36_results)
-    g25_coords = k36_to_g25(user_k36_vector)
-    g25_coords = [round(c, 6) for c in g25_coords]
-    vahaduo_string = f"{sample_name}," + ",".join(str(c) for c in g25_coords)
+    g25_coords = _validated_g25_coords(k36_to_g25(user_k36_vector))
+    g25_coords_csv = ",".join(str(c) for c in g25_coords)
+    vahaduo_string = f"{sample_name},{g25_coords_csv}"
     return {
         "status": "success",
         "k36_results": k36_results,
         "g25_coordinates": g25_coords,
+        "g25_coords_csv": g25_coords_csv,
         "vahaduo_format": vahaduo_string,
-        "note": "SIMULATED G25 from K36 regression. For official G25 use g25requests.app",
+        "note": "SIMULATED G25 from K36 regression. `g25_coords_csv` is coords-only; `vahaduo_format` is sample label + coords.",
     }
 
 
@@ -158,6 +162,24 @@ def k36_to_g25(user_k36_data: List[float]) -> List[float]:
     return result.tolist()
 
 
+def _validated_g25_coords(raw_coords: List[float]) -> List[float]:
+    """
+    Return exactly 25 finite floats (rounded to 6 decimals) or raise 500.
+    """
+    coords = [float(c) for c in raw_coords]
+    if len(coords) != 25:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Unexpected G25 dimension: expected 25, got {len(coords)}.",
+        )
+    if not all(np.isfinite(c) for c in coords):
+        raise HTTPException(
+            status_code=500,
+            detail="Invalid G25 output: non-finite coordinate detected.",
+        )
+    return [round(c, 6) for c in coords]
+
+
 class K36Input(BaseModel):
     k36_results: Dict[str, float]
     sample_name: str = "Sample"
@@ -205,6 +227,21 @@ def check_upload_size(request: Request) -> None:
                 )
         except ValueError:
             pass
+
+
+def require_internal_api_key(request: Request) -> None:
+    """
+    Protect paid/private endpoints. Expected header: X-Internal-Api-Key.
+    """
+    if not INTERNAL_API_KEY:
+        logger.error("INTERNAL_API_KEY is not configured on the server")
+        raise HTTPException(
+            status_code=503,
+            detail="Server auth is not configured.",
+        )
+    provided = request.headers.get(INTERNAL_API_KEY_HEADER, "")
+    if not provided or not secrets.compare_digest(provided, INTERNAL_API_KEY):
+        raise HTTPException(status_code=401, detail="Unauthorized")
 
 
 async def write_upload_to_temp(
@@ -269,6 +306,7 @@ async def process_dna(
     file: UploadFile = File(...),
     vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
     compressed: bool = Form(False, description="Set true if the uploaded file is gzip-compressed (.gz)"),
+    _auth: None = Depends(require_internal_api_key),
     _: None = Depends(check_upload_size),
 ):
     if not file.filename or not file.filename.strip():
@@ -356,7 +394,10 @@ def normalize_k36_key(key: str) -> str:
 
 
 @app.post("/k36-to-g25")
-async def convert_k36_to_g25(data: K36Input):
+async def convert_k36_to_g25(
+    data: K36Input,
+    _auth: None = Depends(require_internal_api_key),
+):
     """
     Convert K36 admixture results to simulated G25 coordinates.
     Uses linear regression approximation based on reference population data.
@@ -374,20 +415,19 @@ async def convert_k36_to_g25(data: K36Input):
 
     # Build ordered K36 vector and run regression
     user_k36_vector = k36_vector_from_dict(k36_results)
-    g25_coords = k36_to_g25(user_k36_vector)
-
-    # Round to 6 decimal places for readability
-    g25_coords = [round(c, 6) for c in g25_coords]
+    g25_coords = _validated_g25_coords(k36_to_g25(user_k36_vector))
+    g25_coords_csv = ",".join(str(c) for c in g25_coords)
 
     # Format as Vahaduo-compatible string
-    vahaduo_string = f"{data.sample_name}," + ",".join(str(c) for c in g25_coords)
+    vahaduo_string = f"{data.sample_name},{g25_coords_csv}"
     
     return {
         "status": "success",
         "sample_name": data.sample_name,
         "g25_coordinates": g25_coords,
+        "g25_coords_csv": g25_coords_csv,
         "vahaduo_format": vahaduo_string,
-        "note": "These are SIMULATED G25 coordinates based on K36 regression. For official G25, use g25requests.app"
+        "note": "These are SIMULATED G25 coordinates based on K36 regression. `g25_coords_csv` is coords-only; `vahaduo_format` is sample label + coords."
     }
 
 
@@ -396,6 +436,7 @@ async def process_dna_to_g25(
     file: UploadFile = File(...),
     vendor: VENDOR_CHOICES = Form("23andme", description="Raw data format: 23andme, ancestry, ftdna, ftdna2, wegene, myheritage"),
     compressed: bool = Form(False, description="Set true if the uploaded file is gzip-compressed (.gz)"),
+    _auth: None = Depends(require_internal_api_key),
     _: None = Depends(check_upload_size),
 ):
     """
@@ -465,6 +506,7 @@ async def raw_to_g25_stream(
     compressed: bool = Form(
         False, description="Set true if the uploaded file is gzip-compressed (.gz)"
     ),
+    _auth: None = Depends(require_internal_api_key),
     _: None = Depends(check_upload_size),
 ):
     """
