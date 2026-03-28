@@ -1,5 +1,18 @@
 FROM python:3.11-slim
 
+# Runtime libs for host-built qpAdm (and similar) mounted into the container.
+# On trixie, libopenblas0 is a metapackage; pull pthread impl so libopenblas.so.0 is on disk.
+# GSL: bookworm has libgsl27, trixie+ has libgsl28 — install whichever exists.
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    libopenblas0-pthread \
+    liblapack3 \
+    libgfortran5 \
+    && (apt-get install -y --no-install-recommends libgsl27 \
+        || apt-get install -y --no-install-recommends libgsl28) \
+    && ldconfig \
+    && test -n "$(find /usr/lib -name libopenblas.so.0 -print -quit)" \
+    && rm -rf /var/lib/apt/lists/*
+
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
