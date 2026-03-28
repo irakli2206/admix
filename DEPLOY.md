@@ -51,6 +51,26 @@ X-Internal-Api-Key: <same-secret>
 
 If missing/wrong, backend returns `401`. If `INTERNAL_API_KEY` is not configured, backend returns `503`.
 
+### qpAdm (ADMIXTOOLS) jobs
+
+Requires **`qpAdm` on the server PATH** (or set `QPADM_BIN` to the full binary path). The Docker image does **not** install ADMIXTOOLS; install on the host and either run uvicorn outside Docker or extend the image / mount the binary.
+
+- `POST /qpadm/jobs` — multipart `bundle` = **zip** (`.par` + files referenced by relative paths), form `par_filename` (default `qpAdm.par`). Returns `{ job_id, status: "queued" }`.
+- `GET /qpadm/jobs/{job_id}` — `{ status, error?, result? }` (`queued` → `running` → `done` | `failed`).
+
+Env (optional):
+
+| Variable | Default | Meaning |
+|----------|---------|---------|
+| `QPADM_ENABLED` | `true` | Set `false` to disable routes |
+| `QPADM_MAX_BUNDLE_MB` | `500` | Max uploaded zip size |
+| `QPADM_TIMEOUT_SEC` | `3600` | Subprocess timeout |
+| `QPADM_BIN` | `qpAdm` | Executable name or path |
+| `QPADM_JOBS_ROOT` | `./qpadm_jobs` under app | Job storage (use a volume on VPS) |
+| `MAX_CONCURRENT_QPADM` | `1` | Parallel qpAdm processes |
+
+Large Reich/AADR reference data: keep on disk (e.g. `/var/qpadm/ref`) and reference it from paths inside your `.par`; do not commit multi‑GB files to git.
+
 ### Progress (SSE) for a UI progress bar
 
 `POST /raw-to-g25/stream` returns **`text/event-stream`**. Each line is `data: <JSON>\n\n` with fields like:
