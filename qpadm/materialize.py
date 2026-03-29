@@ -69,7 +69,10 @@ def _load_manifest(work_dir: str, basename: str) -> Dict[str, List[str]]:
     return out
 
 
-def _pop_to_sample_ids(ind_path: str) -> Dict[str, List[str]]:
+def _pop_to_sample_ids(
+    ind_path: str, *, skip_enhanced: bool = True
+) -> Dict[str, List[str]]:
+    """Map pop label -> sample ids. Skips ids containing '_enhanced' when skip_enhanced (AADR duplicate rows)."""
     m: Dict[str, List[str]] = {}
     with open(ind_path, "r", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -79,7 +82,10 @@ def _pop_to_sample_ids(ind_path: str) -> Dict[str, List[str]]:
             parts = line.split()
             if len(parts) < 3:
                 continue
-            m.setdefault(parts[2], []).append(parts[0])
+            sid = parts[0]
+            if skip_enhanced and "_enhanced" in sid:
+                continue
+            m.setdefault(parts[2], []).append(sid)
     return m
 
 
@@ -111,7 +117,12 @@ def materialize_pop_list_files(
             ind_path = ""
             ind_hint = f" Could not resolve indivname: {e}"
         if ind_path and os.path.isfile(ind_path):
-            pop_map = _pop_to_sample_ids(ind_path)
+            _skip_enh = os.environ.get("QPADM_IND_SKIP_ENHANCED", "true").lower() in (
+                "1",
+                "true",
+                "yes",
+            )
+            pop_map = _pop_to_sample_ids(ind_path, skip_enhanced=_skip_enh)
         elif ind_path:
             logger.warning("qpAdm materialize: indivname not found: %s", ind_path)
             ind_hint = (

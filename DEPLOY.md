@@ -71,6 +71,7 @@ Env (optional):
 | `MAX_CONCURRENT_QPADM` | `1` | Parallel qpAdm processes |
 | `QPADM_SOURCES_MANIFEST` | `qpadm_sources.json` | Basename of optional JSON in the zip; set `-` or `none` to skip reading it |
 | `QPADM_AUTO_POP_LISTS` | `true` | When `true`, fill missing list files from the `indivname` `.ind` (population column) |
+| `QPADM_IND_SKIP_ENHANCED` | `true` | When `true`, omit sample IDs containing `_enhanced` from `.ind` expansion (avoids qpAdm “zero samples” on AADR duplicate rows) |
 
 Large Reich/AADR reference data: keep on disk (e.g. `/var/qpadm/ref`) and reference it from paths inside your `.par`; do not commit multi‑GB files to git.
 
