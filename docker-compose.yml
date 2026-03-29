@@ -25,8 +25,8 @@ services:
     volumes:
       - qpadm_jobs:/data/qpadm_jobs
       - /var/qpadm/ref:/var/qpadm/ref:ro
-      # Put qpAdm on the HOST at /var/qpadm/bin/qpAdm (same tree as ref), or change left path to dirname $(which qpAdm).
-      - /var/qpadm/bin:/host/admixtools/bin:ro
+      # Host directory that contains the qpAdm binary (your build: /opt/admixtools/src/bin).
+      - /opt/admixtools/src/bin:/host/admixtools/bin:ro
 
 volumes:
   qpadm_jobs:
