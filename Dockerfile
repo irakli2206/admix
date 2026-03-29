@@ -16,7 +16,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 WORKDIR /app
 
 RUN pip install --no-cache-dir \
-    fastapi uvicorn numpy scipy pandas pydantic python-multipart
+    fastapi uvicorn numpy scipy pandas pydantic python-multipart python-dotenv
 
 # Prevent BLAS/OpenMP thread contention when running multiple concurrent conversions.
 ENV OPENBLAS_NUM_THREADS=1
