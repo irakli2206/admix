@@ -1,8 +1,15 @@
 """Create qpAdm pop-list files from qpadm_sources.json and/or EIGENSTRAT .ind (col1=id, col3=pop).
 
+Reich qpAdm (see DReichLab qpAdm.c / CompPopGen workshop): each population list file must name
+**population labels** matching **column 3** of the .ind — typically **one line per file**, the same
+label as the filename (e.g. file ``French.DG`` contains the single line ``French.DG``). qpAdm then
+includes **all** individuals with that pop label. Putting **individual IDs** (column 1) in those
+files makes qpAdm treat each line as a population name → ``zero samples`` for IDs like ``S_French-2.DG``.
+
 Precedence for each pop token:
-1. Entry in qpadm_sources.json (if enabled) → write list (authoritative).
-2. Else expansion from indivname .ind (if enabled and file readable) → write list.
+1. Entry in qpadm_sources.json (if enabled) → write list (authoritative; use for explicit ID subsets).
+2. Else expansion from indivname .ind (if enabled and file readable) → write pop label (default) or IDs
+   (see QPADM_IND_LIST_STYLE).
 3. Else keep an existing file from the zip (if present).
 
 This avoids stale empty/broken list files shipped in the zip overriding good manifest/.ind data.
@@ -166,8 +173,19 @@ def materialize_pop_list_files(
             continue
         if auto_from_ind and ind_resolved and token in by_pop:
             ids = by_pop[token]
-            _write_list(path, ids)
-            log.append(f"materialized {token!r} ({len(ids)} ids, from .ind)")
+            use_individuals = os.environ.get(
+                "QPADM_IND_LIST_STYLE", "poplabel"
+            ).lower() in ("individuals", "ids", "samples")
+            if use_individuals:
+                _write_list(path, ids)
+                log.append(
+                    f"materialized {token!r} ({len(ids)} individual ids, from .ind)"
+                )
+            else:
+                _write_list(path, [token])
+                log.append(
+                    f"materialized {token!r} (pop label; {len(ids)} samples in .ind)"
+                )
             continue
         # Keep zip-provided file if present; otherwise qpAdm will fail clearly.
         if not os.path.isfile(path):

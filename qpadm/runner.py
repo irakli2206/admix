@@ -42,6 +42,8 @@ def validate_par_filename(name: str) -> str:
 def _exit_hint(code: int) -> str:
     if code < 0:
         sig = -code
+        if sig == 6:
+            return " (SIGABRT — often qpAdm fatalx; check stderr for 'zero samples' / list file format vs .ind col3)"
         if sig == 9:
             return " (process received SIGKILL — often OOM or cgroup memory limit)"
         if sig == 11:

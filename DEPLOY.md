@@ -78,6 +78,7 @@ If both apply, **manifest wins**, then **.ind**; a file already in the zip is ke
 | `QPADM_SOURCES_MANIFEST` | `qpadm_sources.json` | Manifest basename; `-` / `none` to skip |
 | `QPADM_AUTO_POP_LISTS` | `true` | Expand missing lists from `.ind` when possible |
 | `QPADM_IND_SKIP_ENHANCED` | `true` | Skip sample ids containing `_enhanced` when reading `.ind` |
+| `QPADM_IND_LIST_STYLE` | `poplabel` | `poplabel` = each pop file is one line, the **population label** (col3 in `.ind`), Reich qpAdm default; `individuals` = one sample id per line (advanced / subsets via manifest is safer) |
 | `QPADM_OUTPUT_READ_MAX` | `2097152` | Max bytes of stdout/stderr and small artifacts stored in `result` |
 
 Large reference genotypes: keep on the server (e.g. `/var/...`) and reference them with **absolute paths** in the `.par`.

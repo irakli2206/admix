@@ -50,7 +50,8 @@ class TestMaterializePrecedence(unittest.TestCase):
                 body = f.read()
             self.assertEqual(body, "a\nb\n")
 
-    def test_ind_expands_when_no_manifest(self):
+    def test_ind_writes_pop_label_by_default(self):
+        """qpAdm expects the pop list file to name the .ind col3 label (one line), not sample IDs."""
         with tempfile.TemporaryDirectory() as work:
             ind_rel = os.path.join("refs", "tiny.ind")
             ind_abs = os.path.join(work, ind_rel)
@@ -70,7 +71,35 @@ class TestMaterializePrecedence(unittest.TestCase):
             p = os.path.join(work, "Target.Pop")
             self.assertTrue(os.path.isfile(p))
             with open(p, encoding="utf-8") as f:
-                self.assertEqual(f.read().strip(), "sample1")
+                self.assertEqual(f.read().strip(), "Target.Pop")
+
+    def test_ind_writes_individual_ids_when_env_set(self):
+        with tempfile.TemporaryDirectory() as work:
+            old = os.environ.get("QPADM_IND_LIST_STYLE")
+            os.environ["QPADM_IND_LIST_STYLE"] = "individuals"
+            try:
+                ind_rel = os.path.join("refs", "tiny.ind")
+                ind_abs = os.path.join(work, ind_rel)
+                os.makedirs(os.path.dirname(ind_abs), exist_ok=True)
+                with open(ind_abs, "w", encoding="utf-8") as f:
+                    f.write("sample1 U Target.Pop\n")
+                par = os.path.join(work, "qpAdm.par")
+                with open(par, "w", encoding="utf-8") as f:
+                    f.write(f"indivname: {ind_rel}\n")
+                    f.write("popleft: Target.Pop\n")
+                materialize_pop_list_files(
+                    work,
+                    par,
+                    manifest_basename=DEFAULT_SOURCES_MANIFEST,
+                    auto_from_ind=True,
+                )
+                with open(os.path.join(work, "Target.Pop"), encoding="utf-8") as f:
+                    self.assertEqual(f.read().strip(), "sample1")
+            finally:
+                if old is None:
+                    os.environ.pop("QPADM_IND_LIST_STYLE", None)
+                else:
+                    os.environ["QPADM_IND_LIST_STYLE"] = old
 
 
 if __name__ == "__main__":
