@@ -2,12 +2,8 @@
 #   docker compose up -d --build
 # Copy env:  cp .env.local .env   (or set variables in shell / hosting panel)
 #
-# Typical VPS additions (uncomment):
-#   volumes:
-#     - /path/to/admixtools/bin:/host/admixtools/bin:ro
-#   environment:
-#     QPADM_EXTRA_PATH: /host/admixtools/bin
-#     - /var/qpadm/ref:/var/qpadm/ref:ro
+# AADR / reference: left side = path ON THE HOST (must exist there). Right side must match .par paths.
+# qpAdm binary on host: mount bin + set QPADM_EXTRA_PATH (see DEPLOY.md).
 
 services:
   api:
@@ -27,6 +23,7 @@ services:
       QPADM_BIN: ${QPADM_BIN:-qpAdm}
     volumes:
       - qpadm_jobs:/data/qpadm_jobs
+      - /var/qpadm/ref:/var/qpadm/ref:ro
 
 volumes:
   qpadm_jobs:
