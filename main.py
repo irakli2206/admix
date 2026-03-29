@@ -5,10 +5,13 @@ Application logic lives under ``app/``.
 
 from pathlib import Path
 
-from dotenv import load_dotenv
+# Optional: local dev loads .env.local; Docker usually uses -e / compose (no python-dotenv required).
+try:
+    from dotenv import load_dotenv
 
-# Local secrets (gitignored); does not override vars already set in the shell.
-load_dotenv(Path(__file__).resolve().parent / ".env.local")
+    load_dotenv(Path(__file__).resolve().parent / ".env.local")
+except ImportError:
+    pass
 
 from app.application import create_app
 
