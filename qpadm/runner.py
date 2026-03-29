@@ -9,12 +9,24 @@ import zipfile
 from typing import Any, Dict, List
 
 from qpadm import store
+from qpadm.materialize import DEFAULT_SOURCES_MANIFEST, materialize_pop_list_files
 
 logger = logging.getLogger(__name__)
 
 QPADM_BIN = os.environ.get("QPADM_BIN", "qpAdm")
 QPADM_TIMEOUT_SEC = int(os.environ.get("QPADM_TIMEOUT_SEC", "3600"))
 OUTPUT_READ_MAX = int(os.environ.get("QPADM_OUTPUT_READ_MAX", str(2 * 1024 * 1024)))
+_sources_manifest = os.environ.get("QPADM_SOURCES_MANIFEST", DEFAULT_SOURCES_MANIFEST).strip()
+QPADM_SOURCES_MANIFEST = (
+    ""
+    if _sources_manifest.lower() in ("-", "none")
+    else _sources_manifest
+)
+QPADM_AUTO_POP_LISTS = os.environ.get("QPADM_AUTO_POP_LISTS", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
 
 
 def validate_par_filename(name: str) -> str:
@@ -111,6 +123,15 @@ def run_qpadm_job(job_id: str) -> None:
                 f"Parameter file not found after extract: {par_name!r} (paths in .par must match zip layout)"
             )
 
+        materialized = materialize_pop_list_files(
+            work_dir,
+            par_path,
+            manifest_basename=QPADM_SOURCES_MANIFEST,
+            auto_from_ind=QPADM_AUTO_POP_LISTS,
+        )
+        if materialized:
+            logger.info("qpAdm job %s materialized: %s", job_id, "; ".join(materialized))
+
         env = os.environ.copy()
         # ADMIXTOOLS often expects PATH; optional QPADM_EXTRA_PATH prepended
         extra = os.environ.get("QPADM_EXTRA_PATH", "").strip()
@@ -133,6 +154,7 @@ def run_qpadm_job(job_id: str) -> None:
             "stdout": (proc.stdout or "")[:OUTPUT_READ_MAX],
             "stderr": (proc.stderr or "")[:OUTPUT_READ_MAX],
             "output_files": files_payload,
+            "materialized": materialized,
         }
 
         if proc.returncode != 0:

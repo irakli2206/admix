@@ -18,7 +18,10 @@ router = APIRouter(prefix="/qpadm", tags=["qpAdm"])
 async def qpadm_create_job(
     bundle: UploadFile = File(
         ...,
-        description="Zip archive: qpAdm .par plus EIGENSTRAT / paths referenced by .par",
+        description=(
+            "Zip: qpAdm .par (+ optional qpadm_sources.json). "
+            "Missing pop-list files are created from the JSON or from indivname .ind (pop column)."
+        ),
     ),
     par_filename: str = Form(
         "qpAdm.par",
