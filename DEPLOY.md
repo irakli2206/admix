@@ -51,21 +51,6 @@ X-Internal-Api-Key: <same-secret>
 
 If missing/wrong, backend returns `401`. If `INTERNAL_API_KEY` is not configured, backend returns `503`.
 
-### G25 vs qpAdm: separate containers (recommended)
-
-In **one** process, **OOM or a container crash** takes down **everything**. To keep **G25 conversion** up while qpAdm is experimental, run **two containers** from the **same image** with different env:
-
-| Container | Purpose | Env |
-|-----------|---------|-----|
-| **Public prod** | K36 / G25 only | `CONVERSION_ENABLED=true` **`QPADM_ENABLED=false`** |
-| **Internal / staging** | qpAdm only (optional) | **`CONVERSION_ENABLED=false`** `QPADM_ENABLED=true` |
-
-Bind prod to `:8000` (or behind nginx). Put qpAdm on another port (e.g. `:8001`) and **do not** expose it publicly, or use a second small VPS.
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `CONVERSION_ENABLED` | `true` | Set `false` to drop all **`/raw-to-*`** / **`/k36-to-g25`** routes (qpAdm-only worker). |
-
 ### qpAdm (ADMIXTOOLS) jobs
 
 Requires **`qpAdm` on the server PATH** (or set `QPADM_BIN` to the full binary path). The Docker image does **not** install ADMIXTOOLS; install on the host and either run uvicorn outside Docker or extend the image / mount the binary.
@@ -78,8 +63,7 @@ Env (optional):
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `CONVERSION_ENABLED` | `true` | Set `false` on a **qpAdm-only** container: no `/raw-to-*` / `/k36-to-g25` routes |
-| `QPADM_ENABLED` | `true` | Set `false` on the **G25** container: no `/qpadm`, no qpAdm worker |
+| `QPADM_ENABLED` | `true` | Set `false` to return **503** on `/qpadm/*` and skip the qpAdm background worker |
 | `QPADM_MAX_BUNDLE_MB` | `500` | Max uploaded zip size |
 | `QPADM_TIMEOUT_SEC` | `3600` | Subprocess timeout |
 | `QPADM_BIN` | `qpAdm` | Executable name or path |
