@@ -19,11 +19,14 @@ services:
       QPADM_ENABLED: ${QPADM_ENABLED:-true}
       QPADM_JOBS_ROOT: /data/qpadm_jobs
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
-      QPADM_EXTRA_PATH: ${QPADM_EXTRA_PATH:-}
+      # Host dir mounted below; worker prepends this to PATH when running qpAdm.
+      QPADM_EXTRA_PATH: ${QPADM_EXTRA_PATH:-/host/admixtools/bin}
       QPADM_BIN: ${QPADM_BIN:-qpAdm}
     volumes:
       - qpadm_jobs:/data/qpadm_jobs
       - /var/qpadm/ref:/var/qpadm/ref:ro
+      # Put qpAdm on the HOST at /var/qpadm/bin/qpAdm (same tree as ref), or change left path to dirname $(which qpAdm).
+      - /var/qpadm/bin:/host/admixtools/bin:ro
 
 volumes:
   qpadm_jobs:
