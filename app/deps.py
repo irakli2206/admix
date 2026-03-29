@@ -34,19 +34,6 @@ def check_upload_size(request: Request) -> None:
             pass
 
 
-def check_qpadm_bundle_upload_size(request: Request) -> None:
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > config.QPADM_MAX_BUNDLE_BYTES:
-                raise HTTPException(
-                    status_code=413,
-                    detail=f"Request too large for qpAdm bundle. Max {config.QPADM_MAX_BUNDLE_MB} MB.",
-                )
-        except ValueError:
-            pass
-
-
 def require_internal_api_key(
     api_key: Optional[str] = Security(_internal_api_key_header),
 ) -> None:

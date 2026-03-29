@@ -103,7 +103,4 @@ ENV/
 
 # End of https://www.gitignore.io/api/python
 
-# Local qpAdm job queue + SQLite (do not commit)
-qpadm_jobs/
-
 .DS_Store

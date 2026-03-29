@@ -2,29 +2,15 @@
 
 from __future__ import annotations
 
-from contextlib import asynccontextmanager
-
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
-from app.routers import conversion, health, qp_adm
-from qpadm import consumer as qpadm_consumer
-from qpadm import store as qpadm_store
-
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    if config.QPADM_ENABLED:
-        qpadm_store.init_db()
-        qpadm_consumer.start_background_task()
-    yield
-    if config.QPADM_ENABLED:
-        await qpadm_consumer.stop_background_task()
+from app.routers import conversion, health
 
 
 def create_app() -> FastAPI:
-    app = FastAPI(lifespan=lifespan)
+    app = FastAPI()
     app.add_middleware(
         CORSMiddleware,
         allow_origins=config.CORS_ORIGINS,
@@ -33,5 +19,4 @@ def create_app() -> FastAPI:
     )
     app.include_router(health.router)
     app.include_router(conversion.router)
-    app.include_router(qp_adm.router)
     return app

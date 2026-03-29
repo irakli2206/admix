@@ -51,30 +51,6 @@ X-Internal-Api-Key: <same-secret>
 
 If missing/wrong, backend returns `401`. If `INTERNAL_API_KEY` is not configured, backend returns `503`.
 
-### qpAdm (ADMIXTOOLS) jobs
-
-Requires **`qpAdm` on the server PATH** (or set `QPADM_BIN` to the full binary path). The Docker image does **not** install ADMIXTOOLS; install on the host and either run uvicorn outside Docker or extend the image / mount the binary.
-
-- `POST /qpadm/jobs` — multipart `bundle` = **zip** (`.par` + files referenced by relative paths), form `par_filename` (default `qpAdm.par`). Returns `{ job_id, status: "queued" }`.
-- **Pop lists:** each `popleft` / `popright` token must match a **filename** in the job directory for qpAdm. The worker can **create** those files automatically: (1) add **`qpadm_sources.json`** at the zip root, mapping each token to a JSON array of individual IDs (as in the `.ind` file); and/or (2) if **`indivname:`** in the `.par` points to a readable `.ind`, any token that matches **column 3** (population) is expanded to all sample IDs in that group. Pre-made list files in the zip still win (nothing is overwritten).
-- `GET /qpadm/jobs/{job_id}` — `{ status, error?, result? }` (`queued` → `running` → `done` | `failed`). On success, `result.materialized` lists any auto-generated pop files.
-
-Env (optional):
-
-| Variable | Default | Meaning |
-|----------|---------|---------|
-| `QPADM_ENABLED` | `true` | Set `false` to return **503** on `/qpadm/*` and skip the qpAdm background worker |
-| `QPADM_MAX_BUNDLE_MB` | `500` | Max uploaded zip size |
-| `QPADM_TIMEOUT_SEC` | `3600` | Subprocess timeout |
-| `QPADM_BIN` | `qpAdm` | Executable name or path |
-| `QPADM_JOBS_ROOT` | `./qpadm_jobs` under app | Job storage (use a volume on VPS) |
-| `MAX_CONCURRENT_QPADM` | `1` | Parallel qpAdm processes |
-| `QPADM_SOURCES_MANIFEST` | `qpadm_sources.json` | Basename of optional JSON in the zip; set `-` or `none` to skip reading it |
-| `QPADM_AUTO_POP_LISTS` | `true` | When `true`, fill missing list files from the `indivname` `.ind` (population column) |
-| `QPADM_IND_SKIP_ENHANCED` | `true` | When `true`, omit sample IDs containing `_enhanced` from `.ind` expansion (avoids qpAdm “zero samples” on AADR duplicate rows) |
-
-Large Reich/AADR reference data: keep on disk (e.g. `/var/qpadm/ref`) and reference it from paths inside your `.par`; do not commit multi‑GB files to git.
-
 ### Progress (SSE) for a UI progress bar
 
 `POST /raw-to-g25/stream` returns **`text/event-stream`**. Each line is `data: <JSON>\n\n` with fields like:

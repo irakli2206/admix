@@ -1,0 +1,7 @@
+genotypename: /var/qpadm/ref/AADR/v62.0_1240k_public.geno
+snpname:      /var/qpadm/ref/AADR/v62.0_1240k_public.snp
+indivname:    /var/qpadm/ref/AADR/v62.0_1240k_public.ind
+
+popright: Mbuti.DG Russia_MA1_UP.SG Papuan.DG Italy_Epigravettian.AG.BY.AA Israel_Natufian.AG Russia_UstIshim_IUP.DG
+
+popleft: Croatia_EIA.AG Turkey_Marmara_Barcin_N.AG Russia_Samara_EBA_Yamnaya.AG Georgia_Satsurblia_LateUP.SG Serbia_IronGates_Mesolithic.AG

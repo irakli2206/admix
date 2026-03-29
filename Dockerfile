@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# Runtime libs for host-built qpAdm (and similar) mounted into the container.
+# Runtime BLAS/LAPACK for NumPy/SciPy wheels.
 # On trixie, libopenblas0 is a metapackage; pull pthread impl so libopenblas.so.0 is on disk.
 # GSL: bookworm has libgsl27, trixie+ has libgsl28 — install whichever exists.
 RUN apt-get update && apt-get install -y --no-install-recommends \
@@ -25,7 +25,6 @@ ENV OMP_NUM_THREADS=1
 
 COPY main.py admix_models.py admix_fraction.py raw_data_processing.py progress_tracker.py k36_to_g25_weights.csv ./
 COPY app/ app/
-COPY qpadm/ qpadm/
 COPY data/ data/
 
 EXPOSE 8000
