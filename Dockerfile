@@ -25,6 +25,7 @@ ENV OMP_NUM_THREADS=1
 
 COPY main.py admix_models.py admix_fraction.py raw_data_processing.py progress_tracker.py k36_to_g25_weights.csv ./
 COPY app/ app/
+COPY qpadm/ qpadm/
 COPY data/ data/
 
 EXPOSE 8000

@@ -1,0 +1,31 @@
+# Production-style run (VPS): persistent qpAdm job dir, optional ref + binary mounts.
+#   docker compose up -d --build
+# Copy env:  cp .env.local .env   (or set variables in shell / hosting panel)
+#
+# Typical VPS additions (uncomment):
+#   volumes:
+#     - /path/to/admixtools/bin:/host/admixtools/bin:ro
+#   environment:
+#     QPADM_EXTRA_PATH: /host/admixtools/bin
+#     - /var/qpadm/ref:/var/qpadm/ref:ro
+
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+    environment:
+      OPENBLAS_NUM_THREADS: "1"
+      OMP_NUM_THREADS: "1"
+      MKL_NUM_THREADS: "1"
+      QPADM_ENABLED: ${QPADM_ENABLED:-true}
+      QPADM_JOBS_ROOT: /data/qpadm_jobs
+      INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
+      QPADM_EXTRA_PATH: ${QPADM_EXTRA_PATH:-}
+      QPADM_BIN: ${QPADM_BIN:-qpAdm}
+    volumes:
+      - qpadm_jobs:/data/qpadm_jobs
+
+volumes:
+  qpadm_jobs:

@@ -20,6 +20,14 @@ conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
 
 K36_TIMEOUT = int(os.environ.get("K36_CONVERSION_TIMEOUT", "120"))
 
+QPADM_ENABLED = os.environ.get("QPADM_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+QPADM_MAX_BUNDLE_MB = int(os.environ.get("QPADM_MAX_BUNDLE_MB", "500"))
+QPADM_MAX_BUNDLE_BYTES = QPADM_MAX_BUNDLE_MB * 1024 * 1024
+
 CORS_ORIGINS = [
     "https://kvali.app",
     "https://www.kvali.app",
