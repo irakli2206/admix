@@ -20,6 +20,12 @@ conversion_semaphore = asyncio.Semaphore(MAX_CONCURRENT_CONVERSIONS)
 
 K36_TIMEOUT = int(os.environ.get("K36_CONVERSION_TIMEOUT", "120"))
 
+CONVERSION_ENABLED = os.environ.get("CONVERSION_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 QPADM_ENABLED = os.environ.get("QPADM_ENABLED", "true").lower() in (
     "1",
     "true",
