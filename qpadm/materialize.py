@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import difflib
 import json
 import logging
 import os
@@ -33,6 +34,9 @@ def _resolve_ind_path(work_dir: str, raw: str) -> str:
     if not p:
         raise ValueError("indivname in .par is empty")
     if os.path.isabs(p):
+        return p
+    # Windows: paths like /var/qpadm/... are not isabs() but are Unix VPS paths — do not join work_dir.
+    if os.name == "nt" and p.startswith("/"):
         return p
     work_abs = os.path.abspath(work_dir)
     cand = os.path.abspath(os.path.normpath(os.path.join(work_abs, p)))
@@ -97,16 +101,45 @@ def materialize_pop_list_files(
 
     manifest = _load_manifest(work_dir, manifest_basename)
     pop_map: Dict[str, List[str]] = {}
+    ind_hint = ""
     if auto_from_ind and "indivname" in par:
+        raw_ind = par["indivname"]
         try:
-            ind_path = _resolve_ind_path(work_dir, par["indivname"])
+            ind_path = _resolve_ind_path(work_dir, raw_ind)
         except ValueError as e:
             logger.warning("qpAdm materialize: %s", e)
             ind_path = ""
+            ind_hint = f" Could not resolve indivname: {e}"
         if ind_path and os.path.isfile(ind_path):
             pop_map = _pop_to_sample_ids(ind_path)
         elif ind_path:
             logger.warning("qpAdm materialize: indivname not found: %s", ind_path)
+            ind_hint = (
+                f" indivname file missing: {ind_path!r} "
+                "(common on Windows if .par uses Linux paths like /var/qpadm/ref/...). "
+                "Use a reachable path, or ship qpadm_sources.json / per-pop list files in the zip."
+            )
+    elif auto_from_ind:
+        ind_hint = " No indivname: line in .par; cannot auto-expand from .ind."
+
+    def _missing_msg(tok: str) -> str:
+        base = (
+            f"Missing pop list for {tok!r}. Add a key to {manifest_basename}, "
+            "put a list file named like that token in the zip, or match .ind column 3 exactly."
+        )
+        if ind_hint:
+            return base + ind_hint
+        if pop_map:
+            close = difflib.get_close_matches(tok, pop_map.keys(), n=6, cutoff=0.5)
+            sub = [k for k in pop_map if tok.split("_")[0].lower() in k.lower() or tok.lower() in k.lower()]
+            sub = [k for k in sub if k != tok][:8]
+            extra = ""
+            if close:
+                extra += f" Close labels in .ind: {close}."
+            elif sub:
+                extra += f" Partial name matches in .ind: {sub}."
+            return base + extra
+        return base
 
     log: List[str] = []
     for token in sorted(tokens):
@@ -121,10 +154,7 @@ def materialize_pop_list_files(
         elif token in pop_map:
             ids, src = pop_map[token], ".ind"
         else:
-            raise FileNotFoundError(
-                f"Missing pop list for {token!r}. Add it to {manifest_basename}, "
-                "put the list file in the zip, or use a .ind column-3 label."
-            )
+            raise FileNotFoundError(_missing_msg(token))
 
         ids = [i.strip() for i in ids if i.strip()]
         if not ids:
