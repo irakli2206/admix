@@ -157,13 +157,15 @@ def materialize_pop_list_files(
         if _bad_token(token):
             raise ValueError(f"Unsafe popleft/popright token: {token!r}")
         target = os.path.join(work_dir, token)
-        if os.path.isfile(target):
-            continue
 
+        # Precedence: manifest > .ind > file already in zip. Never let a stale/empty
+        # zipped list override indivname expansion (that caused bogus "zero samples").
         if token in manifest:
             ids, src = manifest[token], "manifest"
         elif token in pop_map:
             ids, src = pop_map[token], ".ind"
+        elif os.path.isfile(target):
+            continue
         else:
             raise FileNotFoundError(_missing_msg(token))
 
