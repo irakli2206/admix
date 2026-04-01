@@ -50,6 +50,8 @@ def ftdna(data_file_name):
     with open(data_file_name, "r", encoding="utf-8", errors="replace") as data:
         data = csv.reader(data)
         for row in data:
+            if not row:
+                continue
             if row[0] == "RSID":
                 continue
             if row[0].startswith("#"):
@@ -65,6 +67,8 @@ def ftdna2(data_file_name):
     with open(data_file_name, "r", encoding="utf-8", errors="replace") as data:
         data = csv.reader(data)
         for row in data:
+            if not row:
+                continue
             if row[0].startswith("#"):
                 continue
             if len(row) == 5 and row[-1] in ["A", "T", "G", "C"]:

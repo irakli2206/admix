@@ -87,6 +87,9 @@ def _collect_output_files(work_dir: str) -> Dict[str, str]:
             low = fn.lower()
             if low.endswith((".par", ".zip")):
                 continue
+            # gprof binary — ends with .out but must not be UTF-8 decoded for JSON
+            if low == "gmon.out":
+                continue
             if any(
                 low.endswith(suf)
                 for suf in (
@@ -174,6 +177,12 @@ def run_qpadm_job(job_id: str) -> None:
 
         if proc.returncode != 0:
             err = f"qpAdm exited with code {proc.returncode}{hint}"
+            if proc.returncode == 255 and "f4 stats all zero" in stdout_t:
+                err += (
+                    " — qpAdm aborted: degenerate f4 matrix (Rank 0). "
+                    "Usually need ≥2 right outgroups loaded (check work dir has every pop list file), "
+                    "and a valid left set (target + ≥2 references for 2-way qpAdm)."
+                )
             store.update_job(job_id, "failed", error=err, result=result)
         else:
             store.update_job(job_id, "done", result=result)
