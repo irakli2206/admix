@@ -103,7 +103,10 @@ ENV/
 
 # End of https://www.gitignore.io/api/python
 
-# qpAdm job queue + SQLite (local / volume; do not commit)
+# ADMIXTURE job queue + SQLite (local / volume; do not commit)
+admixture_jobs_data/
+
+# Legacy qpAdm job dir + SQLite (local; do not commit)
 qpadm_jobs/
 
 .DS_Store

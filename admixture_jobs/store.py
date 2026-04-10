@@ -1,4 +1,4 @@
-"""SQLite job store and on-disk job directories."""
+"""SQLite job store and on-disk job directories for ADMIXTURE runs."""
 
 from __future__ import annotations
 
@@ -18,15 +18,15 @@ _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 def jobs_root() -> str:
     return os.environ.get(
-        "QPADM_JOBS_ROOT",
-        str(_REPO_ROOT / "qpadm_jobs"),
+        "ADMIXTURE_JOBS_ROOT",
+        str(_REPO_ROOT / "admixture_jobs_data"),
     )
 
 
 def _db_path() -> str:
     root = jobs_root()
     os.makedirs(root, exist_ok=True)
-    return os.path.join(root, "qpadm_jobs.db")
+    return os.path.join(root, "admixture_jobs.db")
 
 
 def init_db() -> None:
@@ -37,7 +37,10 @@ def init_db() -> None:
                 CREATE TABLE IF NOT EXISTS jobs (
                     job_id TEXT PRIMARY KEY,
                     status TEXT NOT NULL,
-                    par_filename TEXT NOT NULL,
+                    plink_prefix TEXT NOT NULL,
+                    k INTEGER NOT NULL,
+                    threads INTEGER NOT NULL,
+                    cross_validation INTEGER NOT NULL,
                     error TEXT,
                     result TEXT,
                     created_at REAL NOT NULL,
@@ -50,7 +53,6 @@ def init_db() -> None:
 
 
 def _recover_stale_running() -> None:
-    """After restart, jobs left as running cannot complete."""
     now = time.time()
     with _lock:
         with sqlite3.connect(_db_path()) as conn:
@@ -69,7 +71,6 @@ def new_job_id() -> str:
 
 
 def queued_job_ids() -> list[str]:
-    """Jobs waiting to run (e.g. re-enqueue after process restart)."""
     with _lock:
         with sqlite3.connect(_db_path()) as conn:
             cur = conn.execute(
@@ -78,16 +79,26 @@ def queued_job_ids() -> list[str]:
             return [r[0] for r in cur.fetchall()]
 
 
-def create_job(job_id: str, par_filename: str) -> None:
+def create_job(
+    job_id: str,
+    plink_prefix: str,
+    k: int,
+    threads: int,
+    cross_validation: bool,
+) -> None:
     now = time.time()
+    cv_int = 1 if cross_validation else 0
     with _lock:
         with sqlite3.connect(_db_path()) as conn:
             conn.execute(
                 """
-                INSERT INTO jobs (job_id, status, par_filename, error, result, created_at, updated_at)
-                VALUES (?, 'queued', ?, NULL, NULL, ?, ?)
+                INSERT INTO jobs (
+                    job_id, status, plink_prefix, k, threads, cross_validation,
+                    error, result, created_at, updated_at
+                )
+                VALUES (?, 'queued', ?, ?, ?, ?, NULL, NULL, ?, ?)
                 """,
-                (job_id, par_filename, now, now),
+                (job_id, plink_prefix, k, threads, cv_int, now, now),
             )
             conn.commit()
 
@@ -106,6 +117,7 @@ def get_job(job_id: str) -> Optional[Dict[str, Any]]:
             d["result"] = json.loads(d["result"])
         except json.JSONDecodeError:
             d["result"] = None
+    d["cross_validation"] = bool(d.get("cross_validation"))
     return d
 
 

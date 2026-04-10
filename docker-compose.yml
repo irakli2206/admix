@@ -1,9 +1,8 @@
-# Production-style run (VPS): persistent qpAdm job dir, optional ref + binary mounts.
+# Production-style run (VPS): persistent ADMIXTURE job dir, optional binary mount.
 #   docker compose up -d --build
 # Copy env:  cp .env.local .env   (or set variables in shell / hosting panel)
 #
-# AADR / reference: left side = path ON THE HOST (must exist there). Right side must match .par paths.
-# qpAdm binary on host: mount bin + set QPADM_EXTRA_PATH (see DEPLOY.md).
+# ADMIXTURE binary on host: mount dir + set ADMIXTURE_EXTRA_PATH (see DEPLOY.md).
 
 services:
   api:
@@ -16,17 +15,14 @@ services:
       OPENBLAS_NUM_THREADS: "1"
       OMP_NUM_THREADS: "1"
       MKL_NUM_THREADS: "1"
-      QPADM_ENABLED: ${QPADM_ENABLED:-true}
-      QPADM_JOBS_ROOT: /data/qpadm_jobs
+      ADMIXTURE_ENABLED: ${ADMIXTURE_ENABLED:-true}
+      ADMIXTURE_JOBS_ROOT: /data/admixture_jobs
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
-      # Host dir mounted below; worker prepends this to PATH when running qpAdm.
-      QPADM_EXTRA_PATH: ${QPADM_EXTRA_PATH:-/host/admixtools/bin}
-      QPADM_BIN: ${QPADM_BIN:-qpAdm}
+      ADMIXTURE_EXTRA_PATH: ${ADMIXTURE_EXTRA_PATH:-/host/admixture}
+      ADMIXTURE_BIN: ${ADMIXTURE_BIN:-admixture}
     volumes:
-      - qpadm_jobs:/data/qpadm_jobs
-      - /var/qpadm/ref:/var/qpadm/ref:ro
-      # Host directory that contains the qpAdm binary (your build: /opt/admixtools/src/bin).
-      - /opt/admixtools/src/bin:/host/admixtools/bin:ro
+      - admixture_jobs:/data/admixture_jobs
+      - /opt/admixture:/host/admixture:ro
 
 volumes:
-  qpadm_jobs:
+  admixture_jobs:

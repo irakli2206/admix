@@ -1,4 +1,4 @@
-"""Background queue: bounded concurrency, one worker loop."""
+"""Background queue for ADMIXTURE jobs: bounded concurrency."""
 
 from __future__ import annotations
 
@@ -7,8 +7,8 @@ import logging
 import os
 from typing import Optional
 
-from qpadm import store as qpadm_store
-from qpadm.runner import run_qpadm_job
+from admixture_jobs import store as admixture_store
+from admixture_jobs.runner import run_admixture_job
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,7 @@ _sem: Optional[asyncio.Semaphore] = None
 
 
 def _max_concurrent() -> int:
-    return max(1, int(os.environ.get("MAX_CONCURRENT_QPADM", "1")))
+    return max(1, int(os.environ.get("MAX_CONCURRENT_ADMIXTURE", "1")))
 
 
 async def _worker_loop() -> None:
@@ -27,9 +27,9 @@ async def _worker_loop() -> None:
         job_id = await _queue.get()
         try:
             async with _sem:
-                await asyncio.to_thread(run_qpadm_job, job_id)
+                await asyncio.to_thread(run_admixture_job, job_id)
         except Exception:
-            logger.exception("qpAdm consumer error for job %s", job_id)
+            logger.exception("ADMIXTURE consumer error for job %s", job_id)
         finally:
             _queue.task_done()
 
@@ -40,11 +40,11 @@ def start_background_task() -> None:
         return
     _queue = asyncio.Queue()
     _sem = asyncio.Semaphore(_max_concurrent())
-    for jid in qpadm_store.queued_job_ids():
+    for jid in admixture_store.queued_job_ids():
         _queue.put_nowait(jid)
-        logger.info("qpAdm re-queued job %s after startup", jid)
-    _task = asyncio.create_task(_worker_loop(), name="qpadm-consumer")
-    logger.info("qpAdm consumer started (max concurrent=%s)", _max_concurrent())
+        logger.info("ADMIXTURE re-queued job %s after startup", jid)
+    _task = asyncio.create_task(_worker_loop(), name="admixture-consumer")
+    logger.info("ADMIXTURE consumer started (max concurrent=%s)", _max_concurrent())
 
 
 async def stop_background_task() -> None:
@@ -61,5 +61,5 @@ async def stop_background_task() -> None:
 
 def enqueue(job_id: str) -> None:
     if _queue is None:
-        raise RuntimeError("qpAdm consumer not started")
+        raise RuntimeError("ADMIXTURE consumer not started")
     _queue.put_nowait(job_id)

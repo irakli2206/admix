@@ -26,7 +26,7 @@
    # Low RAM? Add: -e MAX_CONCURRENT_CONVERSIONS=1
    ```
 
-   **Compose (persistent qpAdm jobs):** from repo root, `docker compose up -d --build`. Set `INTERNAL_API_KEY` (and optional `QPADM_EXTRA_PATH`, ref mounts) in a `.env` file; see `docker-compose.yml` comments.
+   **Compose (persistent ADMIXTURE jobs):** from repo root, `docker compose up -d --build`. Set `INTERNAL_API_KEY` (and optional `ADMIXTURE_EXTRA_PATH`, binary mount) in a `.env` file; see `docker-compose.yml` comments.
 
 3. **Use from frontend:** `https://YOUR_SERVER_IP:8000`  
    - Open port 8000 in the VPS firewall.  
@@ -36,7 +36,7 @@
 
 Paid conversion endpoints now require header **`X-Internal-Api-Key`**.
 
-- Protected routes: `POST /raw-to-k36`, `POST /k36-to-g25`, `POST /raw-to-g25`, `POST /raw-to-g25/stream`
+- Protected routes: `POST /raw-to-k36`, `POST /k36-to-g25`, `POST /raw-to-g25`, `POST /raw-to-g25/stream`, `POST /admixture/jobs`, `GET /admixture/jobs/{job_id}`
 - Set backend env on run:
 
 ```bash
@@ -53,35 +53,24 @@ X-Internal-Api-Key: <same-secret>
 
 If missing/wrong, backend returns `401`. If `INTERNAL_API_KEY` is not configured, backend returns `503`.
 
-### qpAdm (ADMIXTOOLS) jobs
+### ADMIXTURE jobs
 
-The image does **not** bundle `qpAdm`. Install ADMIXTOOLS on the host (or mount a built `qpAdm` binary) and set **`QPADM_EXTRA_PATH`** or ensure it is on `PATH` inside the container.
+The image does **not** bundle **ADMIXTURE**. Install the `admixture` binary on the host (or mount it) and set **`ADMIXTURE_EXTRA_PATH`** so the worker can find it (see `docker-compose.yml`).
 
-- **`POST /qpadm/jobs`** — multipart `bundle` = zip (`.par` + files referenced by **relative** paths in the zip). Form `par_filename` (default `qpAdm.par`). Returns `{ job_id, status: "queued" }`.
-- **`GET /qpadm/jobs/{job_id}`** — `status`, `error`, `result` (`returncode`, `stdout`, `stderr`, `exit_hint` for signal deaths, `materialized`, `output_files`).
-
-**Pop lists:** qpAdm expects a **file per population token** named exactly like `popleft` / `popright` labels (one sample id per line). The worker can create them when missing:
-
-1. Optional **`qpadm_sources.json`** at the zip root: `{ "Pop.Label": ["id1", "id2", ...] }` (see `QPADM_SOURCES_MANIFEST`).
-2. If **`indivname:`** in the `.par` points to a **readable** `.ind` (absolute path on the server, e.g. mounted AADR, or a path inside the zip), tokens matching **column 3** are expanded to **column 1** ids.
-
-If both apply, **manifest wins**, then **.ind**; a file already in the zip is kept only when neither source supplies that token (so bad zip lists do not override manifest/.ind).
+- **`POST /admixture/jobs`** — multipart `bundle` = zip with PLINK **`{plink_prefix}.bed`**, **`.bim`**, **`.fam`** at the **root of the zip** (same folder; not nested under `Data/...` unless you include that path in `plink_prefix`). Forms: `plink_prefix` (stem, e.g. `v62.0_HO_small`), `k` (integer ≥ 2), optional `threads` (default `1`, passed as `-jN` when > 1), optional `cross_validation` (default `false`, adds `--cv`). Returns `{ job_id, status: "queued" }`.
+- **`GET /admixture/jobs/{job_id}`** — `status`, `error`, `result` (`returncode`, `stdout`, `stderr`, `output_files` with `.Q` / `.P` / `.log` excerpts, `command`).
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
-| `QPADM_ENABLED` | `true` | `false` disables `/qpadm/*` and the background worker |
-| `QPADM_MAX_BUNDLE_MB` | `500` | Max zip size |
-| `QPADM_TIMEOUT_SEC` | `3600` | Subprocess timeout |
-| `QPADM_BIN` | `qpAdm` | Executable name or path |
-| `QPADM_JOBS_ROOT` | `<repo>/qpadm_jobs` | Job storage (use a volume on VPS) |
-| `MAX_CONCURRENT_QPADM` | `1` | Parallel qpAdm processes |
-| `QPADM_SOURCES_MANIFEST` | `qpadm_sources.json` | Manifest basename; `-` / `none` to skip |
-| `QPADM_AUTO_POP_LISTS` | `true` | Expand missing lists from `.ind` when possible |
-| `QPADM_IND_SKIP_ENHANCED` | `true` | Skip sample ids containing `_enhanced` when reading `.ind` |
-| `QPADM_IND_LIST_STYLE` | `poplabel` | `poplabel` = each pop file is one line, the **population label** (col3 in `.ind`), Reich qpAdm default; `individuals` = one sample id per line (advanced / subsets via manifest is safer) |
-| `QPADM_OUTPUT_READ_MAX` | `2097152` | Max bytes of stdout/stderr and small artifacts stored in `result` |
+| `ADMIXTURE_ENABLED` | `true` | `false` disables `/admixture/*` and the background worker |
+| `ADMIXTURE_MAX_BUNDLE_MB` | `6144` | Max zip size (large PLINK `.bed` sets need headroom) |
+| `ADMIXTURE_TIMEOUT_SEC` | `86400` | Subprocess timeout (24h) |
+| `ADMIXTURE_BIN` | `admixture` | Executable name or path |
+| `ADMIXTURE_JOBS_ROOT` | `<repo>/admixture_jobs_data` | Job storage (use a volume on VPS) |
+| `MAX_CONCURRENT_ADMIXTURE` | `1` | Parallel ADMIXTURE processes |
+| `ADMIXTURE_OUTPUT_READ_MAX` | `2097152` | Max bytes of stdout/stderr and text outputs in `result` |
 
-Large reference genotypes: keep on the server (e.g. `/var/...`) and reference them with **absolute paths** in the `.par`.
+**Removing old qpAdm data on the VPS:** after deploying this stack, run `bash scripts/cleanup-qpadm-on-server.sh` once (or follow the comments inside) to drop the old Docker volume and optional host paths.
 
 ### Progress (SSE) for a UI progress bar
 

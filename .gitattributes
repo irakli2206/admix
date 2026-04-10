@@ -1,1 +1,4 @@
 admix/data/* linguist-vendored
+
+# Shell scripts run on Linux VPS; CRLF breaks bash.
+scripts/*.sh text eol=lf
