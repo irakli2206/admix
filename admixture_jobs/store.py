@@ -29,6 +29,15 @@ def _db_path() -> str:
     return os.path.join(root, "admixture_jobs.db")
 
 
+def _migrate_schema(conn: sqlite3.Connection) -> None:
+    cur = conn.execute("PRAGMA table_info(jobs)")
+    cols = {row[1] for row in cur.fetchall()}
+    if "job_kind" not in cols:
+        conn.execute(
+            "ALTER TABLE jobs ADD COLUMN job_kind TEXT NOT NULL DEFAULT 'bundle'"
+        )
+
+
 def init_db() -> None:
     with _lock:
         with sqlite3.connect(_db_path()) as conn:
@@ -48,6 +57,7 @@ def init_db() -> None:
                 )
                 """
             )
+            _migrate_schema(conn)
             conn.commit()
     _recover_stale_running()
 
@@ -85,6 +95,7 @@ def create_job(
     k: int,
     threads: int,
     cross_validation: bool,
+    job_kind: str = "bundle",
 ) -> None:
     now = time.time()
     cv_int = 1 if cross_validation else 0
@@ -94,11 +105,11 @@ def create_job(
                 """
                 INSERT INTO jobs (
                     job_id, status, plink_prefix, k, threads, cross_validation,
-                    error, result, created_at, updated_at
+                    error, result, created_at, updated_at, job_kind
                 )
-                VALUES (?, 'queued', ?, ?, ?, ?, NULL, NULL, ?, ?)
+                VALUES (?, 'queued', ?, ?, ?, ?, NULL, NULL, ?, ?, ?)
                 """,
-                (job_id, plink_prefix, k, threads, cv_int, now, now),
+                (job_id, plink_prefix, k, threads, cv_int, now, now, job_kind),
             )
             conn.commit()
 

@@ -3,6 +3,7 @@
 # Copy env:  cp .env.local .env   (or set variables in shell / hosting panel)
 #
 # ADMIXTURE binary on host: mount dir + set ADMIXTURE_EXTRA_PATH (see DEPLOY.md).
+# PLINK triplet on host: mount read-only + ADMIXTURE_HOST_PLINK_ROOT (POST /admixture/jobs, omit bundle).
 
 services:
   api:
@@ -20,9 +21,11 @@ services:
       INTERNAL_API_KEY: ${INTERNAL_API_KEY:-}
       ADMIXTURE_EXTRA_PATH: ${ADMIXTURE_EXTRA_PATH:-/host/admixture}
       ADMIXTURE_BIN: ${ADMIXTURE_BIN:-admixture}
+      ADMIXTURE_HOST_PLINK_ROOT: ${ADMIXTURE_HOST_PLINK_ROOT:-/var/admixture/plink}
     volumes:
       - admixture_jobs:/data/admixture_jobs
       - /opt/admixture:/host/admixture:ro
+      - /var/admixture/plink:/var/admixture/plink:ro
 
 volumes:
   admixture_jobs:

@@ -41,7 +41,7 @@ curl -sS -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/docs 2>/dev/null
 echo ""
 echo "=== admixture inside API container ==="
 if [[ -n "$API_CTN" ]]; then
-  docker exec "$API_CTN" sh -c 'echo ADMIXTURE_EXTRA_PATH=$ADMIXTURE_EXTRA_PATH; PATH="${ADMIXTURE_EXTRA_PATH:-/host/admixture}:$PATH" which admixture 2>/dev/null; ls -la /host/admixture 2>/dev/null' 2>/dev/null || echo "docker exec failed"
+  docker exec "$API_CTN" sh -c 'echo ADMIXTURE_EXTRA_PATH=$ADMIXTURE_EXTRA_PATH; echo ADMIXTURE_HOST_PLINK_ROOT=$ADMIXTURE_HOST_PLINK_ROOT; PATH="${ADMIXTURE_EXTRA_PATH:-/host/admixture}:$PATH" which admixture 2>/dev/null; ls -la /host/admixture 2>/dev/null; ls -la /var/admixture/plink 2>/dev/null | head' 2>/dev/null || echo "docker exec failed"
 else
   echo "No running API container found (compose service 'api' or name admix-api)."
 fi

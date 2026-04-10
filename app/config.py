@@ -28,6 +28,9 @@ ADMIXTURE_ENABLED = os.environ.get("ADMIXTURE_ENABLED", "true").lower() in (
 ADMIXTURE_MAX_BUNDLE_MB = int(os.environ.get("ADMIXTURE_MAX_BUNDLE_MB", "6144"))
 ADMIXTURE_MAX_BUNDLE_BYTES = ADMIXTURE_MAX_BUNDLE_MB * 1024 * 1024
 
+# Read-only PLINK triplet on server (container path); POST /admixture/jobs without bundle
+ADMIXTURE_HOST_PLINK_ROOT = os.environ.get("ADMIXTURE_HOST_PLINK_ROOT", "").strip()
+
 CORS_ORIGINS = [
     "https://kvali.app",
     "https://www.kvali.app",

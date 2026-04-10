@@ -57,8 +57,10 @@ If missing/wrong, backend returns `401`. If `INTERNAL_API_KEY` is not configured
 
 The image does **not** bundle **ADMIXTURE**. Install the `admixture` binary on the host (or mount it) and set **`ADMIXTURE_EXTRA_PATH`** so the worker can find it (see `docker-compose.yml`).
 
-- **`POST /admixture/jobs`** — multipart `bundle` = zip with PLINK **`{plink_prefix}.bed`**, **`.bim`**, **`.fam`** at the **root of the zip** (same folder; not nested under `Data/...` unless you include that path in `plink_prefix`). Forms: `plink_prefix` (stem, e.g. `v62.0_HO_small`), `k` (integer ≥ 2), optional `threads` (default `1`, passed as `-jN` when > 1), optional `cross_validation` (default `false`, adds `--cv`). Returns `{ job_id, status: "queued" }`.
-- **`GET /admixture/jobs/{job_id}`** — `status`, `error`, `result` (`returncode`, `stdout`, `stderr`, `output_files` with `.Q` / `.P` / `.log` excerpts, `command`).
+- **`POST /admixture/jobs`** — **Multipart form** (same URL for both modes):
+  - **Server PLINK (no big upload):** send `plink_prefix`, `k`, optional `threads`, optional `cross_validation` — **omit** the `bundle` file. Uses **`ADMIXTURE_HOST_PLINK_ROOT`** (bind-mount). Response includes `job_kind`: `host_disk`.
+  - **Zip upload:** same form fields **plus** file `bundle` = zip with **`{plink_prefix}.bed`**, **`.bim`**, **`.fam`** at zip root. Response `job_kind`: `bundle`.
+- **`GET /admixture/jobs/{job_id}`** — `job_kind`, `status`, `error`, `result` (`returncode`, `stdout`, `stderr`, `output_files`, `command`, `input_bed`, …).
 
 | Variable | Default | Meaning |
 |----------|---------|---------|
@@ -69,6 +71,7 @@ The image does **not** bundle **ADMIXTURE**. Install the `admixture` binary on t
 | `ADMIXTURE_JOBS_ROOT` | `<repo>/admixture_jobs_data` | Job storage (use a volume on VPS) |
 | `MAX_CONCURRENT_ADMIXTURE` | `1` | Parallel ADMIXTURE processes |
 | `ADMIXTURE_OUTPUT_READ_MAX` | `2097152` | Max bytes of stdout/stderr and text outputs in `result` |
+| `ADMIXTURE_HOST_PLINK_ROOT` | `/var/admixture/plink` (compose) | In-container path to read-only PLINK files; host dir must be mounted to match |
 
 **Removing old qpAdm data on the VPS:** after deploying this stack, run `bash scripts/cleanup-qpadm-on-server.sh` once (or follow the comments inside) to drop the old Docker volume and optional host paths.
 
