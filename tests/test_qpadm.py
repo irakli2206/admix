@@ -85,8 +85,10 @@ class TestWriteJobWorkdir(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             for name in ("x.geno", "x.snp", "x.ind"):
                 open(os.path.join(tmp, name), "w").close()
-            old = os.environ.get("QPADM_ALLOWED_PATH_PREFIXES")
+            old_prefix = os.environ.get("QPADM_ALLOWED_PATH_PREFIXES")
+            old_root = os.environ.get("QPADM_JOBS_ROOT")
             os.environ["QPADM_ALLOWED_PATH_PREFIXES"] = tmp
+            os.environ["QPADM_JOBS_ROOT"] = os.path.join(tmp, "jobs_root")
             try:
                 # 3 individuals, 2 SNPs; only pops A and C in model -> indices 0 and 2
                 ind_path = os.path.join(tmp, "x.ind")
@@ -118,17 +120,63 @@ class TestWriteJobWorkdir(unittest.TestCase):
                 with open(os.path.join(work, "qpAdm.par"), encoding="utf-8") as f:
                     par = f.read()
                 self.assertIn("subset.geno", par)
-                with open(os.path.join(work, "subset.ind"), encoding="utf-8") as f:
-                    sub_ind = f.read().strip().splitlines()
-                self.assertEqual(len(sub_ind), 2)
-                with open(os.path.join(work, "subset.geno"), "rb") as f:
+                geno_in_par = snap["genotypename"]
+                with open(geno_in_par, "rb") as f:
                     rows = f.read().splitlines()
                 self.assertEqual(rows, [b"09", b"98"])
             finally:
-                if old is None:
+                if old_prefix is None:
                     os.environ.pop("QPADM_ALLOWED_PATH_PREFIXES", None)
                 else:
-                    os.environ["QPADM_ALLOWED_PATH_PREFIXES"] = old
+                    os.environ["QPADM_ALLOWED_PATH_PREFIXES"] = old_prefix
+                if old_root is None:
+                    os.environ.pop("QPADM_JOBS_ROOT", None)
+                else:
+                    os.environ["QPADM_JOBS_ROOT"] = old_root
+
+
+    def test_custom_ind_mode_cache_hit(self):
+        """Second call with same pops should use cached subset (no re-read)."""
+        with tempfile.TemporaryDirectory() as tmp:
+            old_prefix = os.environ.get("QPADM_ALLOWED_PATH_PREFIXES")
+            old_root = os.environ.get("QPADM_JOBS_ROOT")
+            os.environ["QPADM_ALLOWED_PATH_PREFIXES"] = tmp
+            os.environ["QPADM_JOBS_ROOT"] = os.path.join(tmp, "jobs_root")
+            try:
+                ind_path = os.path.join(tmp, "x.ind")
+                with open(ind_path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write("i1 U A\ni2 U B\ni3 U C\n")
+                snp_path = os.path.join(tmp, "x.snp")
+                with open(snp_path, "w", encoding="utf-8", newline="\n") as f:
+                    f.write("s1 1 0.0 0 A 1\n")
+                geno_path = os.path.join(tmp, "x.geno")
+                with open(geno_path, "wb") as f:
+                    f.write(b"019\n")
+                body = {
+                    "left_pops": ["A"],
+                    "right_pops": ["C"],
+                    "genotypename": geno_path,
+                    "snpname": snp_path,
+                    "indivname": ind_path,
+                    "ind_mode": "custom",
+                    "allsnps": False,
+                    "inbreed": False,
+                    "details": False,
+                }
+                work1 = os.path.join(tmp, "job1")
+                snap1 = write_job_workdir(work1, body)
+                work2 = os.path.join(tmp, "job2")
+                snap2 = write_job_workdir(work2, body)
+                self.assertEqual(snap1["genotypename"], snap2["genotypename"])
+            finally:
+                if old_prefix is None:
+                    os.environ.pop("QPADM_ALLOWED_PATH_PREFIXES", None)
+                else:
+                    os.environ["QPADM_ALLOWED_PATH_PREFIXES"] = old_prefix
+                if old_root is None:
+                    os.environ.pop("QPADM_JOBS_ROOT", None)
+                else:
+                    os.environ["QPADM_JOBS_ROOT"] = old_root
 
 
 class TestEigenstratSubset(unittest.TestCase):

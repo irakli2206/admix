@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import asyncio
+import os
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
@@ -13,6 +15,7 @@ from admixture_jobs import consumer as admixture_consumer
 from admixture_jobs import store as admixture_store
 from qpadm import consumer as qpadm_consumer
 from qpadm import store as qpadm_store
+from qpadm.eigenstrat_subset import warm_page_cache
 
 
 @asynccontextmanager
@@ -23,6 +26,9 @@ async def lifespan(app: FastAPI):
     if config.QPADM_ENABLED:
         qpadm_store.init_db()
         qpadm_consumer.start_background_task()
+        geno = os.environ.get("QPADM_DEFAULT_GENO", "").strip()
+        if geno and os.path.isfile(geno):
+            asyncio.get_event_loop().run_in_executor(None, warm_page_cache, geno)
     yield
     if config.ADMIXTURE_ENABLED:
         await admixture_consumer.stop_background_task()

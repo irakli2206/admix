@@ -9,7 +9,7 @@ from app import config
 from app.deps import require_internal_api_key
 from qpadm import consumer as qpadm_consumer
 from qpadm import store as qpadm_store
-from qpadm.workdir import write_job_workdir
+from qpadm.workdir import save_request
 
 logger = logging.getLogger(__name__)
 
@@ -61,7 +61,8 @@ def qp_adm_create_job(
     _auth: None = Depends(require_internal_api_key),
 ):
     """
-    Queue qpAdm from JSON: writes ``qpAdm.par`` + pop lists, then runs qpAdm.
+    Queue qpAdm from JSON.  Validates inputs and persists ``request.json``;
+    the heavy subset + qpAdm run happen in the background worker.
     Poll GET /qpadm/jobs/{job_id}.
     """
     if not config.QPADM_ENABLED:
@@ -74,7 +75,7 @@ def qp_adm_create_job(
     work_dir = os.path.join(root, job_id, "work")
 
     try:
-        snap = write_job_workdir(work_dir, body.model_dump())
+        snap = save_request(work_dir, body.model_dump())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -90,10 +91,6 @@ def qp_adm_create_job(
         "job_id": job_id,
         "status": "queued",
         "ind_mode": snap.get("ind_mode", "custom"),
-        "genotypename": snap["genotypename"],
-        "snpname": snap["snpname"],
-        "indivname": snap["indivname"],
-        "subset_source": snap.get("subset_source"),
     }
 
 

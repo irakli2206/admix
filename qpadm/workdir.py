@@ -9,6 +9,7 @@ from typing import Any, Dict, List, Optional
 
 from qpadm.eigenstrat_subset import subset_eigenstrat_by_pops
 from qpadm.paths import resolve_under_allowed
+from qpadm.subset_cache import get_cached, put_cached
 
 PAR_NAME = "qpAdm.par"
 LEFT_NAME = "left_pops.txt"
@@ -47,13 +48,22 @@ def _default_triplet() -> tuple[str, str, str]:
     )
 
 
-def write_job_workdir(
-    work_dir: str,
-    body: Dict[str, Any],
-) -> Dict[str, Any]:
-    """
-    Create ``work_dir`` and write ``qpAdm.par``, pop lists, and request snapshot.
-    Returns a dict of resolved paths for logging.
+def _try_symlink(src: str, dst: str) -> None:
+    """Symlink src→dst, falling back to hard-link or no-op."""
+    try:
+        os.symlink(src, dst)
+    except OSError:
+        try:
+            os.link(src, dst)
+        except OSError:
+            pass
+
+
+def save_request(work_dir: str, body: Dict[str, Any]) -> Dict[str, Any]:
+    """Validate and persist the request JSON. No heavy I/O.
+
+    Called by the POST handler so the API responds instantly.
+    Returns a snap dict for the response.
     """
     os.makedirs(work_dir, exist_ok=True)
 
@@ -75,31 +85,76 @@ def write_job_workdir(
     if ind_mode not in ("full", "custom"):
         raise ValueError('ind_mode must be "full" or "custom"')
 
-    source_triplet: Optional[tuple[str, str, str]] = None
-    if ind_mode == "custom":
-        allowed = set(left_pops) | set(right_pops)
-        new_geno, new_snp, new_ind = subset_eigenstrat_by_pops(geno, snp, ind, allowed, work_dir)
-        subsetted = (
-            os.path.realpath(new_geno) != os.path.realpath(geno)
-        )
-        if subsetted:
-            source_triplet = (geno, snp, ind)
-        geno, snp, ind = new_geno, new_snp, new_ind
-
     optional_paths: Dict[str, str] = {}
     for key in ("badsnpname", "snplistname"):
         val = body.get(key)
         if val:
             optional_paths[key] = resolve_under_allowed(str(val))
 
-    allsnps = bool(body.get("allsnps", False))
-    inbreed = bool(body.get("inbreed", False))
-    details = bool(body.get("details", False))
+    snap = {
+        "left_pops": left_pops,
+        "right_pops": right_pops,
+        "genotypename": geno,
+        "snpname": snp,
+        "indivname": ind,
+        "ind_mode": ind_mode,
+        "allsnps": bool(body.get("allsnps", False)),
+        "inbreed": bool(body.get("inbreed", False)),
+        "details": bool(body.get("details", False)),
+        **{k: v for k, v in optional_paths.items()},
+    }
+    with open(os.path.join(work_dir, REQUEST_NAME), "w", encoding="utf-8") as f:
+        json.dump(snap, f, indent=2)
+
+    return snap
+
+
+def prepare_workdir(work_dir: str) -> Dict[str, Any]:
+    """Build qpAdm.par from the saved request.json — called by the background worker.
+
+    Performs the (potentially slow) subsetting here instead of in the POST handler.
+    Uses the subset cache to skip repeated work.
+    Returns the final snap dict.
+    """
+    req_path = os.path.join(work_dir, REQUEST_NAME)
+    with open(req_path, "r", encoding="utf-8") as f:
+        snap = json.load(f)
+
+    left_pops: List[str] = snap["left_pops"]
+    right_pops: List[str] = snap["right_pops"]
+    geno: str = snap["genotypename"]
+    snp: str = snap["snpname"]
+    ind: str = snap["indivname"]
+    ind_mode: str = snap.get("ind_mode", "custom")
+
+    source_triplet: Optional[tuple[str, str, str]] = None
+    if ind_mode == "custom":
+        allowed = set(left_pops) | set(right_pops)
+        cached = get_cached(geno, allowed)
+        if cached is not None:
+            source_triplet = (geno, snp, ind)
+            geno, snp, ind = cached
+        else:
+            new_geno, new_snp, new_ind = subset_eigenstrat_by_pops(
+                geno, snp, ind, allowed, work_dir,
+            )
+            subsetted = os.path.realpath(new_geno) != os.path.realpath(geno)
+            if subsetted:
+                source_triplet = (geno, snp, ind)
+                geno, snp, ind = put_cached(
+                    snap["genotypename"], allowed, new_geno, new_snp, new_ind,
+                )
+            else:
+                geno, snp, ind = new_geno, new_snp, new_ind
 
     with open(os.path.join(work_dir, LEFT_NAME), "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(left_pops) + "\n")
     with open(os.path.join(work_dir, RIGHT_NAME), "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(right_pops) + "\n")
+
+    allsnps = snap.get("allsnps", False)
+    inbreed = snap.get("inbreed", False)
+    details = snap.get("details", False)
 
     lines = [
         f"genotypename: {geno}",
@@ -112,31 +167,35 @@ def write_job_workdir(
     ]
     if details:
         lines.append("details: YES")
-    for k, v in optional_paths.items():
-        lines.append(f"{k}: {v}")
+    for k in ("badsnpname", "snplistname"):
+        v = snap.get(k)
+        if v:
+            lines.append(f"{k}: {v}")
 
     with open(os.path.join(work_dir, PAR_NAME), "w", encoding="utf-8", newline="\n") as f:
         f.write("\n".join(lines) + "\n")
 
-    snap = {
-        "left_pops": left_pops,
-        "right_pops": right_pops,
-        "genotypename": geno,
-        "snpname": snp,
-        "indivname": ind,
-        "ind_mode": ind_mode,
-        "allsnps": allsnps,
-        "inbreed": inbreed,
-        "details": details,
-        **{k: v for k, v in optional_paths.items()},
-    }
+    snap["genotypename"] = geno
+    snap["snpname"] = snp
+    snap["indivname"] = ind
     if source_triplet is not None:
         snap["subset_source"] = {
             "genotypename": source_triplet[0],
             "snpname": source_triplet[1],
             "indivname": source_triplet[2],
         }
-    with open(os.path.join(work_dir, REQUEST_NAME), "w", encoding="utf-8") as f:
+
+    with open(req_path, "w", encoding="utf-8") as f:
         json.dump(snap, f, indent=2)
 
     return snap
+
+
+# Keep for backward compatibility with tests that call it directly
+def write_job_workdir(
+    work_dir: str,
+    body: Dict[str, Any],
+) -> Dict[str, Any]:
+    """One-shot: save request + prepare workdir (used by tests)."""
+    save_request(work_dir, body)
+    return prepare_workdir(work_dir)

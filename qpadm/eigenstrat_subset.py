@@ -13,9 +13,10 @@ Supports three .geno layouts:
 from __future__ import annotations
 
 import logging
+import mmap
 import os
 import shutil
-from typing import Iterable, Optional, Tuple
+from typing import Iterable, Tuple
 
 import numpy as np
 
@@ -120,7 +121,11 @@ def _subset_packed_binary(
     rlen: int,
     n_snp: int,
 ) -> int:
-    """Read PACKEDANCESTRYMAP binary, write **text EIGENSTRAT** subset.
+    """Read PACKEDANCESTRYMAP binary via mmap, write **text EIGENSTRAT** subset.
+
+    Uses a single memory-map + one vectorized numpy expression instead of
+    chunked reads.  The OS kernel handles prefetching and page-cache management,
+    which is substantially faster than explicit read() loops on large files.
 
     Bit packing (EIGENSOFT convention): individual *k* is stored at byte
     ``k // 4``, shift ``(3 - k % 4) * 2`` (high-order bits first).
@@ -129,28 +134,30 @@ def _subset_packed_binary(
     in_byte_idx = (ki // 4).astype(np.intp)
     in_bit_shift = ((3 - (ki % 4)) * 2).astype(np.uint8)
 
-    chunk_budget = max(1, min(50_000, 100_000_000 // max(rlen, 1)))
+    with open(geno_path, "rb") as fin:
+        mm = mmap.mmap(fin.fileno(), 0, access=mmap.ACCESS_READ)
+        try:
+            data = np.frombuffer(
+                mm, dtype=np.uint8, offset=rlen, count=n_snp * rlen,
+            ).reshape(n_snp, rlen)
 
-    with open(geno_path, "rb") as fin, open(out_geno, "wb") as fout:
-        hdr = fin.read(rlen)
-        if len(hdr) != rlen:
-            raise ValueError("packed .geno: header too short")
+            # Single vectorized extraction — no Python loop.
+            # Fancy indexing creates a copy, releasing the mmap dependency.
+            selected_bytes = data[:, in_byte_idx].copy()
+            del data
+        finally:
+            mm.close()
 
-        remaining = n_snp
-        while remaining > 0:
-            chunk_n = min(chunk_budget, remaining)
-            raw = fin.read(chunk_n * rlen)
-            if len(raw) != chunk_n * rlen:
-                raise ValueError(
-                    f"packed .geno: expected {chunk_n * rlen} bytes, got {len(raw)}"
-                )
-            matrix = np.frombuffer(raw, dtype=np.uint8).reshape(chunk_n, rlen)
-            geno_vals = (matrix[:, in_byte_idx] >> in_bit_shift) & 3
-            text = np.where(geno_vals == 3, 9, geno_vals).astype(np.uint8) + ord("0")
-            newlines = np.full((chunk_n, 1), ord("\n"), dtype=np.uint8)
-            rows = np.hstack([text, newlines])
-            fout.write(rows.tobytes())
-            remaining -= chunk_n
+    geno_vals = (selected_bytes >> in_bit_shift) & 3
+    text = np.where(geno_vals == 3, 9, geno_vals).astype(np.uint8) + ord("0")
+    del selected_bytes, geno_vals
+
+    newlines = np.full((n_snp, 1), ord("\n"), dtype=np.uint8)
+    rows = np.hstack([text, newlines])
+    del text
+
+    with open(out_geno, "wb") as fout:
+        fout.write(rows.tobytes())
 
     return n_snp
 
@@ -223,6 +230,25 @@ def _subset_transposed(
 
 
 # ---------------------------------------------------------------------------
+# Page-cache warmup
+# ---------------------------------------------------------------------------
+
+def warm_page_cache(geno_path: str) -> None:
+    """Sequentially read the entire file to pull it into the OS page cache.
+
+    Call this once at startup in a background thread.  Subsequent mmap-based
+    subsets will hit RAM instead of disk.
+    """
+    try:
+        with open(geno_path, "rb") as f:
+            while f.read(4 * 1024 * 1024):
+                pass
+        logger.info("page cache warmed for %s", geno_path)
+    except OSError as e:
+        logger.warning("page cache warmup failed for %s: %s", geno_path, e)
+
+
+# ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
@@ -277,7 +303,10 @@ def subset_eigenstrat_by_pops(
     out_ind = os.path.join(out_dir, f"{basename}.ind")
     out_snp = os.path.join(out_dir, f"{basename}.snp")
     os.makedirs(out_dir, exist_ok=True)
-    shutil.copy2(snp_path, out_snp)
+    try:
+        os.symlink(os.path.abspath(snp_path), out_snp)
+    except OSError:
+        shutil.copy2(snp_path, out_snp)
 
     with open(out_ind, "w", encoding="utf-8", newline="\n") as fout:
         fout.write("\n".join(ind_out_lines) + "\n")
