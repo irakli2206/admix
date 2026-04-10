@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Optional
+from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -25,6 +25,14 @@ class QpAdmJobCreate(BaseModel):
 
     left_pops: list[str] = Field(..., min_length=1, max_length=64)
     right_pops: list[str] = Field(..., min_length=1, max_length=64)
+    ind_mode: Literal["full", "custom"] = Field(
+        "custom",
+        description=(
+            "custom (default): copy only individuals whose .ind column 3 is in "
+            "left_pops or right_pops into the job work dir first (faster, lower memory). "
+            "full: use the reference genotype matrix as-is."
+        ),
+    )
     genotypename: Optional[str] = None
     snpname: Optional[str] = None
     indivname: Optional[str] = None
@@ -81,9 +89,11 @@ def qp_adm_create_job(
     return {
         "job_id": job_id,
         "status": "queued",
+        "ind_mode": snap.get("ind_mode", "custom"),
         "genotypename": snap["genotypename"],
         "snpname": snap["snpname"],
         "indivname": snap["indivname"],
+        "subset_source": snap.get("subset_source"),
     }
 
 

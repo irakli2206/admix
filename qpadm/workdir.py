@@ -7,6 +7,7 @@ import os
 import re
 from typing import Any, Dict, List, Optional
 
+from qpadm.eigenstrat_subset import subset_eigenstrat_by_pops
 from qpadm.paths import resolve_under_allowed
 
 PAR_NAME = "qpAdm.par"
@@ -70,6 +71,16 @@ def write_job_workdir(
             raise ValueError("Provide all of genotypename, snpname, indivname or none for defaults")
         geno, snp, ind = _default_triplet()
 
+    ind_mode = str(body.get("ind_mode", "custom")).strip().lower()
+    if ind_mode not in ("full", "custom"):
+        raise ValueError('ind_mode must be "full" or "custom"')
+
+    source_triplet: Optional[tuple[str, str, str]] = None
+    if ind_mode == "custom":
+        source_triplet = (geno, snp, ind)
+        allowed = set(left_pops) | set(right_pops)
+        geno, snp, ind = subset_eigenstrat_by_pops(geno, snp, ind, allowed, work_dir)
+
     optional_paths: Dict[str, str] = {}
     for key in ("badsnpname", "snplistname"):
         val = body.get(key)
@@ -108,11 +119,18 @@ def write_job_workdir(
         "genotypename": geno,
         "snpname": snp,
         "indivname": ind,
+        "ind_mode": ind_mode,
         "allsnps": allsnps,
         "inbreed": inbreed,
         "details": details,
         **{k: v for k, v in optional_paths.items()},
     }
+    if source_triplet is not None:
+        snap["subset_source"] = {
+            "genotypename": source_triplet[0],
+            "snpname": source_triplet[1],
+            "indivname": source_triplet[2],
+        }
     with open(os.path.join(work_dir, REQUEST_NAME), "w", encoding="utf-8") as f:
         json.dump(snap, f, indent=2)
 
