@@ -164,6 +164,24 @@ class TestEigenstratSubset(unittest.TestCase):
             with self.assertRaises(ValueError):
                 subset_eigenstrat_by_pops(geno, snp, ind, {"Z"}, tmp)
 
+    def test_transposed_layout(self):
+        """One geno row per individual; output is SNP-major for qpAdm."""
+        with tempfile.TemporaryDirectory() as tmp:
+            ind = os.path.join(tmp, "a.ind")
+            with open(ind, "w", encoding="utf-8", newline="\n") as f:
+                f.write("a U P\nb U Q\nc U P\n")
+            snp = os.path.join(tmp, "a.snp")
+            with open(snp, "w", encoding="utf-8", newline="\n") as f:
+                f.write("s1 1 0 0 A 1\ns2 1 0 0 A 1\n")
+            geno = os.path.join(tmp, "a.geno")
+            with open(geno, "wb") as f:
+                f.write(b"01\n10\n02\n")
+            out = os.path.join(tmp, "out")
+            g2, _, _ = subset_eigenstrat_by_pops(geno, snp, ind, {"P"}, out)
+            with open(g2, "rb") as f:
+                rows = f.read().splitlines()
+            self.assertEqual(rows, [b"00", b"12"])
+
 
 if __name__ == "__main__":
     unittest.main()

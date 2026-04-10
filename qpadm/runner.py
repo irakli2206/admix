@@ -38,6 +38,16 @@ def _read_text_file(path: str, limit: int) -> str:
         return ""
 
 
+def _cleanup_subset_files(work_dir: str) -> None:
+    """Remove large subset EIGENSTRAT files written by ind_mode=custom after qpAdm exits."""
+    for name in ("subset.geno", "subset.snp", "subset.ind"):
+        path = os.path.join(work_dir, name)
+        try:
+            os.remove(path)
+        except OSError:
+            pass
+
+
 def _collect_output_files(work_dir: str) -> Dict[str, str]:
     out: Dict[str, str] = {}
     skip = {PAR_NAME.lower(), "request.json", "left_pops.txt", "right_pops.txt"}
@@ -100,6 +110,7 @@ def run_qp_adm_job(job_id: str) -> None:
             errors="replace",
         )
 
+        _cleanup_subset_files(work_dir)
         files_payload = _collect_output_files(work_dir)
         stdout_t = (proc.stdout or "")[:OUTPUT_READ_MAX]
         stderr_t = (proc.stderr or "")[:OUTPUT_READ_MAX]
@@ -123,13 +134,16 @@ def run_qp_adm_job(job_id: str) -> None:
         else:
             store.update_job(job_id, "done", result=result)
     except subprocess.TimeoutExpired:
+        _cleanup_subset_files(work_dir)
         store.update_job(
             job_id,
             "failed",
             error=f"qpAdm timed out after {QPADM_TIMEOUT_SEC}s",
         )
     except FileNotFoundError as e:
+        _cleanup_subset_files(work_dir)
         store.update_job(job_id, "failed", error=str(e))
     except Exception as e:
+        _cleanup_subset_files(work_dir)
         logger.exception("qpAdm job %s failed", job_id)
         store.update_job(job_id, "failed", error=str(e))
