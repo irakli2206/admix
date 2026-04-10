@@ -1,20 +1,71 @@
-"""Subset a packed EIGENSTRAT trio to individuals whose .ind column 3 is in ``pops``."""
+"""Subset a packed EIGENSTRAT trio to individuals whose .ind column 3 is in ``pops``.
+
+Supports three .geno layouts:
+
+* **PACKEDANCESTRYMAP** — binary, 2 bits per genotype, "GENO" header.
+  Detected by magic bytes + file-size check.  Output is text EIGENSTRAT so
+  we don't need to recompute hashes for the header.
+* **Text SNP-major** — one ASCII digit per individual per SNP row (standard
+  EIGENSTRAT).
+* **Text transposed** — one row per individual (rare).
+"""
 
 from __future__ import annotations
 
 import logging
 import os
 import shutil
-from typing import Iterable
+from typing import Iterable, Optional, Tuple
 
 import numpy as np
 
 logger = logging.getLogger(__name__)
 
-# Transposed layout is loaded fully into memory; cap to avoid OOM on mistaken huge matrices.
 _TRANSPOSED_MAX_MATRIX_BYTES = int(
     os.environ.get("QPADM_TRANSPOSED_MAX_MATRIX_BYTES", str(512 * 1024 * 1024))
 )
+
+
+# ---------------------------------------------------------------------------
+# Layout detection
+# ---------------------------------------------------------------------------
+
+def _detect_packed(
+    geno_path: str,
+    n_ind: int,
+) -> Tuple[bool, int, int]:
+    """Return ``(True, rlen, n_snp)`` if *geno_path* is PACKEDANCESTRYMAP."""
+    rlen = max(48, (n_ind + 3) // 4)
+    file_size = os.path.getsize(geno_path)
+    if file_size < rlen:
+        return (False, 0, 0)
+
+    with open(geno_path, "rb") as f:
+        header = f.read(rlen)
+
+    if len(header) < 4 or header[:4] != b"GENO":
+        return (False, 0, 0)
+
+    try:
+        header_text = header.split(b"\x00")[0].decode("ascii", errors="replace")
+        parts = header_text.split()
+        h_nind = int(parts[1])
+        h_nsnp = int(parts[2])
+    except (ValueError, IndexError):
+        return (False, 0, 0)
+
+    if h_nind != n_ind:
+        logger.warning(
+            "packed .geno header nind=%d != .ind nind=%d; skipping packed detection",
+            h_nind, n_ind,
+        )
+        return (False, 0, 0)
+
+    expected = rlen * (1 + h_nsnp)
+    if file_size != expected:
+        return (False, 0, 0)
+
+    return (True, rlen, h_nsnp)
 
 
 def _count_newlines(path: str) -> int:
@@ -28,6 +79,82 @@ def _count_newlines(path: str) -> int:
     return n
 
 
+def _detect_layout(
+    geno_path: str,
+    n_ind: int,
+) -> Tuple[str, int, int]:
+    """Return ``(layout, rlen, n_snp)``.
+
+    *layout* is one of ``"packed"``, ``"snp_major"``, ``"transposed"``, or
+    ``"unknown"``.  For ``"packed"`` *rlen* and *n_snp* are set; for text
+    layouts they are 0.
+    """
+    is_packed, rlen, n_snp = _detect_packed(geno_path, n_ind)
+    if is_packed:
+        return ("packed", rlen, n_snp)
+
+    with open(geno_path, "rb") as f:
+        first = f.readline().rstrip(b"\r\n")
+    w = len(first)
+
+    if w == n_ind:
+        return ("snp_major", 0, 0)
+
+    n_lines = _count_newlines(geno_path)
+    if n_lines == n_ind:
+        return ("transposed", 0, 0)
+
+    return ("unknown", 0, 0)
+
+
+# ---------------------------------------------------------------------------
+# Subset helpers
+# ---------------------------------------------------------------------------
+
+def _subset_packed_binary(
+    geno_path: str,
+    out_geno: str,
+    n_ind: int,
+    ki: np.ndarray,
+    n_kept: int,
+    rlen: int,
+    n_snp: int,
+) -> int:
+    """Read PACKEDANCESTRYMAP binary, write **text EIGENSTRAT** subset.
+
+    Bit packing (EIGENSOFT convention): individual *k* is stored at byte
+    ``k // 4``, shift ``(3 - k % 4) * 2`` (high-order bits first).
+    Values 0/1/2 = genotypes, 3 = missing (written as ``9`` in text output).
+    """
+    in_byte_idx = (ki // 4).astype(np.intp)
+    in_bit_shift = ((3 - (ki % 4)) * 2).astype(np.uint8)
+
+    chunk_budget = max(1, min(50_000, 100_000_000 // max(rlen, 1)))
+
+    with open(geno_path, "rb") as fin, open(out_geno, "wb") as fout:
+        hdr = fin.read(rlen)
+        if len(hdr) != rlen:
+            raise ValueError("packed .geno: header too short")
+
+        remaining = n_snp
+        while remaining > 0:
+            chunk_n = min(chunk_budget, remaining)
+            raw = fin.read(chunk_n * rlen)
+            if len(raw) != chunk_n * rlen:
+                raise ValueError(
+                    f"packed .geno: expected {chunk_n * rlen} bytes, got {len(raw)}"
+                )
+            matrix = np.frombuffer(raw, dtype=np.uint8).reshape(chunk_n, rlen)
+            geno_vals = (matrix[:, in_byte_idx] >> in_bit_shift) & 3
+            text = np.where(geno_vals == 3, 9, geno_vals).astype(np.uint8) + ord("0")
+            newlines = np.full((chunk_n, 1), ord("\n"), dtype=np.uint8)
+            rows = np.hstack([text, newlines])
+            fout.write(rows.tobytes())
+            remaining -= chunk_n
+
+    return n_snp
+
+
 def _subset_snp_major(
     geno_path: str,
     out_geno: str,
@@ -35,7 +162,7 @@ def _subset_snp_major(
     ki: np.ndarray,
     n_kept: int,
 ) -> int:
-    """Each row = one SNP, one byte per individual (qpAdm / Reich packed default)."""
+    """Text SNP-major: each row = one SNP, one ASCII byte per individual."""
     n_snp = 0
     with open(geno_path, "rb") as fin, open(out_geno, "wb") as fout:
         for raw in fin:
@@ -44,7 +171,7 @@ def _subset_snp_major(
             if len(line) != n_ind:
                 raise ValueError(
                     f".geno line {n_snp}: length {len(line)} != "
-                    f"n_individuals {n_ind} from .ind (SNP-major layout)"
+                    f"n_individuals {n_ind} from .ind (SNP-major text layout)"
                 )
             subset = np.frombuffer(line, dtype=np.uint8)[ki].tobytes()
             fout.write(subset + b"\n")
@@ -58,7 +185,7 @@ def _subset_transposed(
     ki: np.ndarray,
     n_kept: int,
 ) -> int:
-    """Each row = one individual, one byte per SNP; output SNP-major for qpAdm."""
+    """Text transposed: each row = one individual; output SNP-major."""
     geno_rows: list[bytes] = []
     with open(geno_path, "rb") as fin:
         for i, raw in enumerate(fin):
@@ -87,13 +214,17 @@ def _subset_transposed(
                 f".geno line {i + 1}: length {len(row)} != first row length {row_len}"
             )
     matrix = np.frombuffer(b"".join(geno_rows), dtype=np.uint8).reshape(n_ind, n_snp)
-    kept = matrix[ki, :]  # (n_kept, n_snp)
-    snp_major = kept.T     # (n_snp, n_kept)
+    kept = matrix[ki, :]
+    snp_major = kept.T
     with open(out_geno, "wb") as fout:
         for row in snp_major:
             fout.write(row.tobytes() + b"\n")
     return n_snp
 
+
+# ---------------------------------------------------------------------------
+# Public API
+# ---------------------------------------------------------------------------
 
 def subset_eigenstrat_by_pops(
     geno_path: str,
@@ -105,13 +236,11 @@ def subset_eigenstrat_by_pops(
 ) -> tuple[str, str, str]:
     """
     Copy ``snp`` unchanged; write a new ``.ind`` with only rows whose population
-    (3rd whitespace-separated field) is in ``pops``; write a new ``.geno`` with one
-    packed genotype character per kept individual per SNP row.
+    (3rd whitespace-separated field) is in ``pops``; write a new ``.geno`` with
+    only the kept individuals (text EIGENSTRAT output, auto-detected by qpAdm).
 
-    Supports **SNP-major** (default Reich / qpAdm: each .geno row = one SNP, width =
-    n individuals) and **transposed** (each .geno row = one individual, width =
-    n SNPs), detected from first row width vs n_ind.  Layout count only reads the
-    full file when the first row width does not match n_ind (rare / non-standard).
+    Supports PACKEDANCESTRYMAP binary, text SNP-major, and text transposed
+    ``.geno`` layouts.
     """
     pop_set = {p for p in pops if p}
     if not pop_set:
@@ -156,32 +285,34 @@ def subset_eigenstrat_by_pops(
     ki = np.asarray(keep_indices, dtype=np.intp)
     n_kept = len(ki)
 
-    with open(geno_path, "rb") as f:
-        first = f.readline().rstrip(b"\r\n")
-    w = len(first)
+    layout, rlen, packed_n_snp = _detect_layout(geno_path, n_ind)
 
-    if w == n_ind:
-        # Standard SNP-major: no need to count lines.
-        layout = "snp_major"
-    else:
-        n_lines = _count_newlines(geno_path)
-        if n_lines == n_ind:
-            layout = "transposed"
-        else:
-            raise ValueError(
-                f".geno does not match .ind: first row width {w}, "
-                f"{n_lines} lines in .geno, {n_ind} lines in .ind. "
-                "Expected SNP-major (each row length = n individuals, many rows) or "
-                "transposed (each row = one individual, row count = n individuals). "
-                "Check that genotypename/snpname/indivname are the same build."
-            )
+    if layout == "unknown":
+        logger.warning(
+            "eigenstrat subset: .geno layout unrecognised — "
+            "falling back to full reference files",
+        )
+        for p in (out_geno, out_ind, out_snp):
+            try:
+                os.remove(p)
+            except OSError:
+                pass
+        return (
+            os.path.abspath(geno_path),
+            os.path.abspath(snp_path),
+            os.path.abspath(ind_path),
+        )
 
     logger.info(
         "eigenstrat subset layout=%s n_ind=%s n_kept=%s pops=%s",
         layout, n_ind, n_kept, len(pop_set),
     )
 
-    if layout == "snp_major":
+    if layout == "packed":
+        n_snp = _subset_packed_binary(
+            geno_path, out_geno, n_ind, ki, n_kept, rlen, packed_n_snp,
+        )
+    elif layout == "snp_major":
         n_snp = _subset_snp_major(geno_path, out_geno, n_ind, ki, n_kept)
     else:
         n_snp = _subset_transposed(geno_path, out_geno, n_ind, ki, n_kept)

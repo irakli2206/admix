@@ -182,6 +182,59 @@ class TestEigenstratSubset(unittest.TestCase):
                 rows = f.read().splitlines()
             self.assertEqual(rows, [b"00", b"12"])
 
+    def test_packed_binary_layout(self):
+        """PACKEDANCESTRYMAP: 2 bits per genotype, GENO header, high-order first."""
+        with tempfile.TemporaryDirectory() as tmp:
+            # 5 individuals in 3 pops, 3 SNPs; keep pop P (indices 0, 2, 4)
+            ind = os.path.join(tmp, "a.ind")
+            with open(ind, "w", encoding="utf-8", newline="\n") as f:
+                f.write("a U P\nb U Q\nc U P\nd U Q\ne U P\n")
+            snp = os.path.join(tmp, "a.snp")
+            with open(snp, "w", encoding="utf-8", newline="\n") as f:
+                f.write("s1 1 0 0 A G\ns2 1 0 0 C T\ns3 1 0 0 A C\n")
+
+            rlen = 48  # max(48, ceil(5/4)) = 48
+            # Build header
+            header = b"GENO       5       3 0 0"
+            header = header + b"\x00" * (rlen - len(header))
+
+            # SNP 0: individuals [0,1,2,3,4] = [0,1,2,3,1]
+            # ind k -> byte k//4, shift (3-k%4)*2
+            #   ind0: 0<<6=0x00, ind1: 1<<4=0x10, ind2: 2<<2=0x08, ind3: 3<<0=0x03
+            #   byte0 = 0x1B, ind4: 1<<6=0x40, byte1 = 0x40
+            snp0 = bytearray(rlen)
+            snp0[0] = 0x1B
+            snp0[1] = 0x40
+
+            # SNP 1: [2,0,1,2,0]
+            #   ind0: 2<<6=0x80, ind1: 0<<4=0, ind2: 1<<2=0x04, ind3: 2<<0=0x02
+            #   byte0 = 0x86, ind4: 0<<6=0, byte1 = 0x00
+            snp1 = bytearray(rlen)
+            snp1[0] = 0x86
+
+            # SNP 2: [1,2,0,1,3(missing)]
+            #   ind0: 1<<6=0x40, ind1: 2<<4=0x20, ind2: 0<<2=0, ind3: 1<<0=0x01
+            #   byte0 = 0x61, ind4: 3<<6=0xC0, byte1 = 0xC0
+            snp2 = bytearray(rlen)
+            snp2[0] = 0x61
+            snp2[1] = 0xC0
+
+            geno = os.path.join(tmp, "a.geno")
+            with open(geno, "wb") as f:
+                f.write(header + bytes(snp0) + bytes(snp1) + bytes(snp2))
+
+            out = os.path.join(tmp, "out")
+            g2, s2, i2 = subset_eigenstrat_by_pops(geno, snp, ind, {"P"}, out)
+            self.assertTrue(os.path.isfile(g2))
+            with open(g2, "rb") as f:
+                rows = f.read().splitlines()
+            # kept inds [0,2,4]: SNP0=[0,2,1], SNP1=[2,1,0], SNP2=[1,0,3→9]
+            self.assertEqual(rows, [b"021", b"210", b"109"])
+            with open(i2, "r", encoding="utf-8") as f:
+                kept_lines = [l.strip() for l in f if l.strip()]
+            self.assertEqual(len(kept_lines), 3)
+            self.assertIn("P", kept_lines[0])
+
 
 if __name__ == "__main__":
     unittest.main()

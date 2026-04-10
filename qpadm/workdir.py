@@ -77,9 +77,14 @@ def write_job_workdir(
 
     source_triplet: Optional[tuple[str, str, str]] = None
     if ind_mode == "custom":
-        source_triplet = (geno, snp, ind)
         allowed = set(left_pops) | set(right_pops)
-        geno, snp, ind = subset_eigenstrat_by_pops(geno, snp, ind, allowed, work_dir)
+        new_geno, new_snp, new_ind = subset_eigenstrat_by_pops(geno, snp, ind, allowed, work_dir)
+        subsetted = (
+            os.path.realpath(new_geno) != os.path.realpath(geno)
+        )
+        if subsetted:
+            source_triplet = (geno, snp, ind)
+        geno, snp, ind = new_geno, new_snp, new_ind
 
     optional_paths: Dict[str, str] = {}
     for key in ("badsnpname", "snplistname"):
