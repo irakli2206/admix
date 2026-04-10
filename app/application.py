@@ -8,9 +8,11 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app import config
-from app.routers import admixture, conversion, health
+from app.routers import admixture, conversion, health, qp_adm
 from admixture_jobs import consumer as admixture_consumer
 from admixture_jobs import store as admixture_store
+from qpadm import consumer as qpadm_consumer
+from qpadm import store as qpadm_store
 
 
 @asynccontextmanager
@@ -18,9 +20,14 @@ async def lifespan(app: FastAPI):
     if config.ADMIXTURE_ENABLED:
         admixture_store.init_db()
         admixture_consumer.start_background_task()
+    if config.QPADM_ENABLED:
+        qpadm_store.init_db()
+        qpadm_consumer.start_background_task()
     yield
     if config.ADMIXTURE_ENABLED:
         await admixture_consumer.stop_background_task()
+    if config.QPADM_ENABLED:
+        await qpadm_consumer.stop_background_task()
 
 
 def create_app() -> FastAPI:
@@ -34,4 +41,5 @@ def create_app() -> FastAPI:
     app.include_router(health.router)
     app.include_router(conversion.router)
     app.include_router(admixture.router)
+    app.include_router(qp_adm.router)
     return app

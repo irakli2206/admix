@@ -31,6 +31,12 @@ ADMIXTURE_MAX_BUNDLE_BYTES = ADMIXTURE_MAX_BUNDLE_MB * 1024 * 1024
 # Read-only PLINK triplet on server (container path); POST /admixture/jobs without bundle
 ADMIXTURE_HOST_PLINK_ROOT = os.environ.get("ADMIXTURE_HOST_PLINK_ROOT", "").strip()
 
+QPADM_ENABLED = os.environ.get("QPADM_ENABLED", "true").lower() in (
+    "1",
+    "true",
+    "yes",
+)
+
 CORS_ORIGINS = [
     "https://kvali.app",
     "https://www.kvali.app",

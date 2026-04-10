@@ -36,7 +36,7 @@
 
 Paid conversion endpoints now require header **`X-Internal-Api-Key`**.
 
-- Protected routes: `POST /raw-to-k36`, `POST /k36-to-g25`, `POST /raw-to-g25`, `POST /raw-to-g25/stream`, `POST /admixture/jobs`, `GET /admixture/jobs/{job_id}`
+- Protected routes: `POST /raw-to-k36`, `POST /k36-to-g25`, `POST /raw-to-g25`, `POST /raw-to-g25/stream`, `POST /admixture/jobs`, `GET /admixture/jobs/{job_id}`, `POST /qpadm/jobs`, `GET /qpadm/jobs/{job_id}`
 - Set backend env on run:
 
 ```bash
@@ -73,7 +73,28 @@ The image does **not** bundle **ADMIXTURE**. Install the `admixture` binary on t
 | `ADMIXTURE_OUTPUT_READ_MAX` | `2097152` | Max bytes of stdout/stderr and text outputs in `result` |
 | `ADMIXTURE_HOST_PLINK_ROOT` | `/var/admixture/plink` (compose) | In-container path to read-only PLINK files; host dir must be mounted to match |
 
-**Removing old qpAdm data on the VPS:** after deploying this stack, run `bash scripts/cleanup-qpadm-on-server.sh` once (or follow the comments inside) to drop the old Docker volume and optional host paths.
+### qpAdm (ADMIXTOOLS) jobs
+
+The image does **not** bundle `qpAdm`. Mount the host build (see `docker-compose.yml`: `/opt/admixtools/src/bin` → `/host/admixtools/bin`) and AADR under **`/var/qpadm/ref`**.
+
+- **`POST /qpadm/jobs`** — JSON body:
+  - **`left_pops`**, **`right_pops`**: arrays of population labels (`.ind` column 3), one model per request; first **left** pop = target, rest = sources; **right** = outgroups.
+  - **`genotypename`**, **`snpname`**, **`indivname`**: optional absolute paths inside an allowed prefix; if omitted, **`QPADM_DEFAULT_*`** env paths are used.
+  - **`allsnps`**, **`inbreed`**, **`details`**: booleans (mapped to `YES`/`NO` in the `.par` file).
+  - **`badsnpname`**, **`snplistname`**: optional paths (also constrained to allowed prefixes).
+- **`GET /qpadm/jobs/{job_id}`** — `status`, `error`, `result` (`stdout`, `stderr`, `output_files`, …).
+
+**Memory:** large public `.geno` files can require **many GB RAM**; small VPS may OOM-kill `qpAdm`. Use a smaller panel or a larger server.
+
+| Variable | Default (compose) | Meaning |
+|----------|-------------------|---------|
+| `QPADM_ENABLED` | `true` | `false` disables `/qpadm/*` and worker |
+| `QPADM_JOBS_ROOT` | `/data/qpadm_jobs` | Job dirs + SQLite (volume) |
+| `QPADM_EXTRA_PATH` | `/host/admixtools/bin` | Prepended to `PATH` for `qpAdm` |
+| `QPADM_BIN` | `qpAdm` | Executable name |
+| `QPADM_TIMEOUT_SEC` | `86400` | Subprocess timeout |
+| `QPADM_ALLOWED_PATH_PREFIXES` | `/var/qpadm/ref` | Colon-separated roots; EIGENSTRAT paths must resolve under one of them |
+| `QPADM_DEFAULT_GENO` / `_SNP` / `_IND` | AADR 1240k public paths | Used when request omits all three paths |
 
 ### Progress (SSE) for a UI progress bar
 
