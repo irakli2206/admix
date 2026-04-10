@@ -1,6 +1,6 @@
 import logging
 import os
-from typing import Literal, Optional
+from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field, model_validator
@@ -18,26 +18,16 @@ router = APIRouter(prefix="/qpadm", tags=["qpAdm"])
 
 class QpAdmJobCreate(BaseModel):
     """
-    Build qpAdm.par under the job work dir. ``left_pops`` / ``right_pops`` are
-    one population label per line (``.ind`` column 3), Reich-style: first left
-    pop is the target, remaining left pops are sources; right pops are outgroups.
+    Run qpAdm via ADMIXTOOLS 2.  ``left_pops`` / ``right_pops`` are population
+    labels (``.ind`` column 3), Reich-style: first left pop is the target,
+    remaining left pops are sources; right pops are outgroups.
     """
 
     left_pops: list[str] = Field(..., min_length=1, max_length=64)
     right_pops: list[str] = Field(..., min_length=1, max_length=64)
-    ind_mode: Literal["full", "custom"] = Field(
-        "custom",
-        description=(
-            "custom (default): copy only individuals whose .ind column 3 is in "
-            "left_pops or right_pops into the job work dir first (faster, lower memory). "
-            "full: use the reference genotype matrix as-is."
-        ),
-    )
     genotypename: Optional[str] = None
     snpname: Optional[str] = None
     indivname: Optional[str] = None
-    badsnpname: Optional[str] = None
-    snplistname: Optional[str] = None
     allsnps: bool = False
     inbreed: bool = False
     details: bool = False
@@ -61,8 +51,8 @@ def qp_adm_create_job(
     _auth: None = Depends(require_internal_api_key),
 ):
     """
-    Queue qpAdm from JSON.  Validates inputs and persists ``request.json``;
-    the heavy subset + qpAdm run happen in the background worker.
+    Queue qpAdm (ADMIXTOOLS 2) from JSON.  Validates inputs and persists
+    ``request.json``; the R-based qpadm() run happens in the background worker.
     Poll GET /qpadm/jobs/{job_id}.
     """
     if not config.QPADM_ENABLED:
@@ -75,7 +65,7 @@ def qp_adm_create_job(
     work_dir = os.path.join(root, job_id, "work")
 
     try:
-        snap = save_request(work_dir, body.model_dump())
+        save_request(work_dir, body.model_dump())
     except ValueError as e:
         raise HTTPException(status_code=400, detail=str(e))
 
@@ -90,7 +80,6 @@ def qp_adm_create_job(
     return {
         "job_id": job_id,
         "status": "queued",
-        "ind_mode": snap.get("ind_mode", "custom"),
     }
 
 

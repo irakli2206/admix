@@ -73,28 +73,52 @@ The image does **not** bundle **ADMIXTURE**. Install the `admixture` binary on t
 | `ADMIXTURE_OUTPUT_READ_MAX` | `2097152` | Max bytes of stdout/stderr and text outputs in `result` |
 | `ADMIXTURE_HOST_PLINK_ROOT` | `/var/admixture/plink` (compose) | In-container path to read-only PLINK files; host dir must be mounted to match |
 
-### qpAdm (ADMIXTOOLS) jobs
+### qpAdm (ADMIXTOOLS 2) jobs
 
-The image does **not** bundle `qpAdm`. Mount the host build (see `docker-compose.yml`: `/opt/admixtools/src/bin` → `/host/admixtools/bin`) and AADR under **`/var/qpadm/ref`**.
+The Docker image includes **R** and the **ADMIXTOOLS 2** R package. Mount AADR reference data under **`/var/qpadm/ref`**.
+
+#### One-time setup: precompute f2 blocks
+
+After deploying and mounting the AADR panel, run `extract_f2.R` **once** to precompute blocked f2 statistics for all populations. This takes 30–90 minutes depending on hardware but makes every subsequent qpAdm job complete in **2–10 seconds**.
+
+```bash
+# Inside the container (or on the host with R + admixtools installed):
+docker exec -it admix-api Rscript /app/scripts/extract_f2.R \
+  /var/qpadm/ref/AADR/v62.0_1240k_public \
+  /data/qpadm_f2 \
+  --n_cores 4 --maxmem 8000
+```
+
+Re-run this command when the reference panel changes (new AADR version).
+
+#### API
 
 - **`POST /qpadm/jobs`** — JSON body:
   - **`left_pops`**, **`right_pops`**: arrays of population labels (`.ind` column 3), one model per request; first **left** pop = target, rest = sources; **right** = outgroups.
   - **`genotypename`**, **`snpname`**, **`indivname`**: optional absolute paths inside an allowed prefix; if omitted, **`QPADM_DEFAULT_*`** env paths are used.
-  - **`allsnps`**, **`inbreed`**, **`details`**: booleans (mapped to `YES`/`NO` in the `.par` file).
-  - **`badsnpname`**, **`snplistname`**: optional paths (also constrained to allowed prefixes).
-- **`GET /qpadm/jobs/{job_id}`** — `status`, `error`, `result` (`stdout`, `stderr`, `output_files`, …).
+  - **`allsnps`**, **`inbreed`**, **`details`**: booleans.
+- **`GET /qpadm/jobs/{job_id}`** — `status`, `error`, `result`.
 
-**Memory:** large public `.geno` files can require **many GB RAM**; small VPS may OOM-kill `qpAdm`. Use a smaller panel or a larger server.
+When `result` is available (status `done`), it contains structured JSON:
+
+```json
+{
+  "weights": [{"target": "X", "left": "A", "weight": 0.45, "se": 0.03, "z": 15.0}],
+  "rankdrop": [{"f4rank": 0, "dof": 10, "chisq": 8.2, "p": 0.61}],
+  "popdrop": [...],
+  "elapsed_sec": 3.2
+}
+```
 
 | Variable | Default (compose) | Meaning |
 |----------|-------------------|---------|
 | `QPADM_ENABLED` | `true` | `false` disables `/qpadm/*` and worker |
 | `QPADM_JOBS_ROOT` | `/data/qpadm_jobs` | Job dirs + SQLite (volume) |
-| `QPADM_EXTRA_PATH` | `/host/admixtools/bin` | Prepended to `PATH` for `qpAdm` |
-| `QPADM_BIN` | `qpAdm` | Executable name |
+| `QPADM_F2_DIR` | `/data/qpadm_f2` | Precomputed f2 blocks from `extract_f2.R` |
 | `QPADM_TIMEOUT_SEC` | `86400` | Subprocess timeout |
-| `QPADM_ALLOWED_PATH_PREFIXES` | `/var/qpadm/ref` | Colon-separated roots; EIGENSTRAT paths must resolve under one of them |
-| `QPADM_DEFAULT_GENO` / `_SNP` / `_IND` | AADR 1240k public paths | Used when request omits all three paths |
+| `QPADM_ALLOWED_PATH_PREFIXES` | `/var/qpadm/ref` | Colon-separated roots; EIGENSTRAT paths must resolve under one |
+| `QPADM_DEFAULT_GENO` / `_SNP` / `_IND` | AADR 1240k public paths | Used when request omits all three paths; also needed for `extract_f2.R` |
+| `QPADM_RSCRIPT` | `Rscript` | Path to `Rscript` binary (usually default is fine) |
 
 ### Progress (SSE) for a UI progress bar
 

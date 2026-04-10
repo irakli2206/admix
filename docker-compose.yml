@@ -4,7 +4,7 @@
 #
 # ADMIXTURE binary on host: mount dir + set ADMIXTURE_EXTRA_PATH (see DEPLOY.md).
 # PLINK triplet on host: mount read-only + ADMIXTURE_HOST_PLINK_ROOT (POST /admixture/jobs, omit bundle).
-# qpAdm: mount ADMIXTOOLS bin + AADR (see QPADM_* env defaults).
+# qpAdm: ADMIXTOOLS 2 (R) is built into the image; mount AADR reference + f2 cache volume.
 
 services:
   api:
@@ -25,8 +25,7 @@ services:
       ADMIXTURE_HOST_PLINK_ROOT: ${ADMIXTURE_HOST_PLINK_ROOT:-/var/admixture/plink}
       QPADM_ENABLED: ${QPADM_ENABLED:-true}
       QPADM_JOBS_ROOT: /data/qpadm_jobs
-      QPADM_EXTRA_PATH: ${QPADM_EXTRA_PATH:-/host/admixtools/bin}
-      QPADM_BIN: ${QPADM_BIN:-qpAdm}
+      QPADM_F2_DIR: ${QPADM_F2_DIR:-/data/qpadm_f2}
       QPADM_ALLOWED_PATH_PREFIXES: ${QPADM_ALLOWED_PATH_PREFIXES:-/var/qpadm/ref}
       QPADM_DEFAULT_GENO: ${QPADM_DEFAULT_GENO:-/var/qpadm/ref/AADR/v62.0_1240k_public.geno}
       QPADM_DEFAULT_SNP: ${QPADM_DEFAULT_SNP:-/var/qpadm/ref/AADR/v62.0_1240k_public.snp}
@@ -34,11 +33,12 @@ services:
     volumes:
       - admixture_jobs:/data/admixture_jobs
       - qpadm_jobs:/data/qpadm_jobs
+      - qpadm_f2:/data/qpadm_f2
       - /opt/admixture:/host/admixture:ro
       - /var/admixture/plink:/var/admixture/plink:ro
-      - /opt/admixtools/src/bin:/host/admixtools/bin:ro
       - /var/qpadm/ref:/var/qpadm/ref:ro
 
 volumes:
   admixture_jobs:
   qpadm_jobs:
+  qpadm_f2:
