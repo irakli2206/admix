@@ -25,7 +25,7 @@ services:
       ADMIXTURE_HOST_PLINK_ROOT: ${ADMIXTURE_HOST_PLINK_ROOT:-/var/admixture/plink}
       QPADM_ENABLED: ${QPADM_ENABLED:-true}
       QPADM_JOBS_ROOT: /data/qpadm_jobs
-      QPADM_F2_DIR: ${QPADM_F2_DIR:-/data/qpadm_f2}
+      QPADM_F2_DIR: ${QPADM_F2_DIR:-}
       QPADM_ALLOWED_PATH_PREFIXES: ${QPADM_ALLOWED_PATH_PREFIXES:-/var/qpadm/ref}
       QPADM_DEFAULT_GENO: ${QPADM_DEFAULT_GENO:-/var/qpadm/ref/AADR/v62.0_1240k_public.geno}
       QPADM_DEFAULT_SNP: ${QPADM_DEFAULT_SNP:-/var/qpadm/ref/AADR/v62.0_1240k_public.snp}

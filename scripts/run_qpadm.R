@@ -46,23 +46,29 @@ all_pops <- unique(c(left, right))
 #   allsnps ON   → genotype prefix (allsnps needs per-quartet SNP selection,
 #                   which is incompatible with precomputed f2 blocks)
 #   no f2 dir    → genotype prefix regardless
-use_f2 <- !allsnps && !is.null(f2_dir) && dir.exists(f2_dir)
+f2_valid <- !allsnps &&
+            !is.null(f2_dir) &&
+            dir.exists(f2_dir) &&
+            file.exists(file.path(f2_dir, "block_lengths_f2.rds"))
 
-if (use_f2) {
+if (f2_valid) {
   message(sprintf("Using precomputed f2 from: %s", f2_dir))
-  # Load the 3D block array ourselves; passing the directory string to qpadm()
-  # triggers an R "unused arguments" bug (auto_only/blgsize/poly_only forwarded
-  # to f2_from_precomp which doesn't accept them).
-  data_arg <- f2_from_precomp(f2_dir, pops = all_pops, afprod = FALSE, verbose = FALSE)
-} else if (!is.null(geno_prefix)) {
-  if (allsnps) {
-    message(sprintf("allsnps=TRUE → reading genotype files: %s", geno_prefix))
-  } else {
-    message(sprintf("No f2 dir; falling back to genotype prefix: %s", geno_prefix))
+  data_arg <- tryCatch(
+    f2_from_precomp(f2_dir, pops = all_pops, afprod = FALSE, verbose = FALSE),
+    error = function(e) {
+      message(sprintf("f2 cache failed (%s), falling back to genotype prefix", conditionMessage(e)))
+      NULL
+    }
+  )
+  if (is.null(data_arg)) {
+    if (is.null(geno_prefix)) stop("f2 cache unusable and no geno_prefix provided")
+    data_arg <- geno_prefix
   }
+} else if (!is.null(geno_prefix)) {
+  message(sprintf("Reading genotype files: %s", geno_prefix))
   data_arg <- geno_prefix
 } else {
-  stop("Neither f2_dir nor geno_prefix provided")
+  stop("Neither a valid f2 cache nor geno_prefix provided")
 }
 
 message(sprintf("target=%s  sources=%s  right=%s  allsnps=%s",
