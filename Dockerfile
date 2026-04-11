@@ -21,7 +21,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && rm -rf /var/lib/apt/lists/*
 
 # Install ADMIXTOOLS 2 R package + jsonlite for structured output.
+# Pin readr to 2.1.5: newer versions removed read_table2() which admixtools still calls.
 RUN R -e "install.packages(c('remotes', 'jsonlite'), repos='https://cloud.r-project.org')" \
+    && R -e "remotes::install_version('readr', version='2.1.5', repos='https://cloud.r-project.org')" \
     && R -e "remotes::install_github('uqrmaie1/admixtools', upgrade='never')"
 
 WORKDIR /app
