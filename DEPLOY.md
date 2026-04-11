@@ -79,17 +79,32 @@ The Docker image includes **R** and the **ADMIXTOOLS 2** R package. Mount AADR r
 
 #### One-time setup: precompute f2 blocks
 
-After deploying and mounting the AADR panel, run `extract_f2.R` **once** to precompute blocked f2 statistics for all populations. This takes 30–90 minutes depending on hardware but makes every subsequent qpAdm job complete in **2–10 seconds**.
+After deploying and mounting the AADR panel, run `extract_f2.R` **once** to precompute blocked f2 statistics. This can take **hours** on a small VPS but makes `allsnps: false` qpAdm jobs complete in **seconds**.
+
+**Memory:** full public AADR has **thousands** of populations × **~1.2M SNPs** — the allele-frequency step can need **tens of GB RAM** if chunking does not shrink it enough. On a typical VPS you should either:
+
+- use **`--pops-file`** listing only populations your product allows (one label per line, matching `.ind` column 3), or  
+- use aggressive chunking: **`--maxmem 1024 --cols_per_chunk 2`** (slower, less RAM), or  
+- run extraction on a **64GB+** machine once, then copy the `/data/qpadm_f2` volume to production.
+
+The script defaults to `fst=FALSE` and `afprod=FALSE` (f2-only), matching the API’s `f2_from_precomp(..., afprod=FALSE)` path.
 
 ```bash
-# Inside the container (or on the host with R + admixtools installed):
+# Example: subset pops (recommended on low-RAM VPS)
 docker exec -it admix-api Rscript /app/scripts/extract_f2.R \
   /var/qpadm/ref/AADR/v62.0_1240k_public \
   /data/qpadm_f2 \
-  --n_cores 4 --maxmem 8000
+  --pops-file /var/qpadm/ref/allowed_pops.txt \
+  --n_cores 4 --maxmem 2048 --cols_per_chunk 4
+
+# Example: all pops from .ind (needs large RAM or small cols_per_chunk)
+docker exec -it admix-api Rscript /app/scripts/extract_f2.R \
+  /var/qpadm/ref/AADR/v62.0_1240k_public \
+  /data/qpadm_f2 \
+  --n_cores 4 --maxmem 1024 --cols_per_chunk 2
 ```
 
-Re-run this command when the reference panel changes (new AADR version).
+Re-run when the reference panel changes (new AADR version). **Jobs that request populations missing from the f2 cache will fail** until you re-extract with those pops included (or they fall back to the slow genotype path when `allsnps: true` only — for `allsnps: false` with f2 dir set, pops must exist in the cache).
 
 #### API
 
