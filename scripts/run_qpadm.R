@@ -41,12 +41,25 @@ return_f4   <- isTRUE(req$details)
 
 all_pops <- unique(c(left, right))
 
-# Decide data source: precomputed f2 or genotype prefix fallback
-if (!is.null(f2_dir) && dir.exists(f2_dir)) {
+# Decide data source:
+#   allsnps OFF  → precomputed f2 array (fast path, ~2-5s)
+#   allsnps ON   → genotype prefix (allsnps needs per-quartet SNP selection,
+#                   which is incompatible with precomputed f2 blocks)
+#   no f2 dir    → genotype prefix regardless
+use_f2 <- !allsnps && !is.null(f2_dir) && dir.exists(f2_dir)
+
+if (use_f2) {
   message(sprintf("Using precomputed f2 from: %s", f2_dir))
-  data_arg <- f2_dir
+  # Load the 3D block array ourselves; passing the directory string to qpadm()
+  # triggers an R "unused arguments" bug (auto_only/blgsize/poly_only forwarded
+  # to f2_from_precomp which doesn't accept them).
+  data_arg <- f2_from_precomp(f2_dir, pops = all_pops, afprod = FALSE, verbose = FALSE)
 } else if (!is.null(geno_prefix)) {
-  message(sprintf("No f2 dir; falling back to genotype prefix: %s", geno_prefix))
+  if (allsnps) {
+    message(sprintf("allsnps=TRUE → reading genotype files: %s", geno_prefix))
+  } else {
+    message(sprintf("No f2 dir; falling back to genotype prefix: %s", geno_prefix))
+  }
   data_arg <- geno_prefix
 } else {
   stop("Neither f2_dir nor geno_prefix provided")
@@ -59,14 +72,26 @@ message(sprintf("target=%s  sources=%s  right=%s  allsnps=%s",
 t0 <- proc.time()
 
 res <- tryCatch({
-  qpadm(
-    data       = data_arg,
-    left       = left,
-    right      = right,
-    target     = target,
-    return_f4  = return_f4,
-    verbose    = FALSE
-  )
+  if (is.character(data_arg)) {
+    qpadm(
+      data      = data_arg,
+      left      = left,
+      right     = right,
+      target    = target,
+      return_f4 = return_f4,
+      verbose   = FALSE,
+      allsnps   = allsnps
+    )
+  } else {
+    qpadm(
+      data      = data_arg,
+      left      = left,
+      right     = right,
+      target    = target,
+      return_f4 = return_f4,
+      verbose   = FALSE
+    )
+  }
 }, error = function(e) {
   result <- list(
     error = conditionMessage(e)
